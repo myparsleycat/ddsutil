@@ -10,7 +10,7 @@ import (
 	"image/png"
 	"os"
 
-	"ddsutil"
+	"github.com/myparsleycat/ddsutil"
 )
 
 func main() {

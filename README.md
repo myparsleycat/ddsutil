@@ -32,7 +32,7 @@ dependencies (Go standard library only).
 ## Usage
 
 ```go
-import "ddsutil"
+import "github.com/myparsleycat/ddsutil"
 
 // Read and decode a DDS file to an RGBA image.
 data, _ := os.ReadFile("texture.dds")

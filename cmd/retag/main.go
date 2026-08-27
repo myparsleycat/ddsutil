@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"ddsutil"
+	"github.com/myparsleycat/ddsutil"
 )
 
 func main() {
