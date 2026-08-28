@@ -27,6 +27,8 @@ dependencies (Go standard library only).
   - BC6H: mode 11 (explicit 10.10.10 endpoints, no delta compression).
   - BC7: mode 6 (7-bit RGBA endpoints with p-bits, 4-bit indices).
 - Mipmap generation (box-filtered downsampling).
+- Random-access mip reads and bounded-memory preview decoding without loading
+  the complete DDS payload or full-resolution RGBA image.
 - Golden-file tested against reference DDS files.
 
 ## Usage
@@ -46,6 +48,23 @@ dds2, err := ddsutil.DdsFromImage(img, ddsutil.BC7RgbaUnorm,
 // Work with the raw file container.
 fmt.Println(dds.GetWidth(), dds.GetHeight())
 data0, _ := dds.GetData(0) // mip chain of array layer 0
+```
+
+For large textures, use `DdsReader` to read or decode only the mip needed by
+the caller:
+
+```go
+file, err := os.Open("texture.dds")
+info, err := file.Stat()
+reader, err := ddsutil.NewDdsReader(file, info.Size())
+metadata := reader.Metadata()
+
+// Decode array layer 0, mip level 2 without reading earlier mip payloads.
+mip, err := reader.DecodeMipRgba8(0, 2)
+
+// Decode directly to a smaller nearest-neighbour preview without allocating
+// a full-resolution RGBA image.
+preview, err := reader.DecodeMipRgba8To(0, 0, 2048, 2048)
 ```
 
 The core codec types are `Surface`, `SurfaceRgba8`, and `SurfaceRgba32Float`.
