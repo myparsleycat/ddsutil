@@ -1,4 +1,6 @@
 # ddsutil
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmyparsleycat%2Fddsutil.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmyparsleycat%2Fddsutil?ref=badge_shield)
+
 
 A unified DirectDraw Surface (DDS) library for Go, providing two layers in a
 single package:
@@ -99,3 +101,6 @@ reference files in `testdata/`.
 ## License
 
 MIT, see LICENSE.
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmyparsleycat%2Fddsutil.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmyparsleycat%2Fddsutil?ref=badge_large)
