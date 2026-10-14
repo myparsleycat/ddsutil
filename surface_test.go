@@ -320,7 +320,7 @@ func TestDecodeEncodeAllFormatsF32(t *testing.T) {
 // TestEncodeDecode3dMipmapsRoundTrip checks that every depth slice of every
 // mipmap of a 3D surface survives encoding and decoding.
 func TestEncodeDecode3dMipmapsRoundTrip(t *testing.T) {
-	for _, format := range []ImageFormat{Rgba8Unorm, Bgra8Unorm, BC1RgbaUnorm} {
+	for _, format := range []ImageFormat{Rgba8Unorm, Bgra8Unorm, BC1RgbaUnorm, BC7RgbaUnorm} {
 		format := format
 		t.Run(format.String(), func(t *testing.T) {
 			const w, h, d = 8, 8, 4

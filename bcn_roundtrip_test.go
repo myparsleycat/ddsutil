@@ -319,3 +319,40 @@ func TestSnormEncodeDecodeF32(t *testing.T) {
 		})
 	}
 }
+
+// TestFixUpIndexMostSignificantBit checks blocks whose first pixel is best
+// represented by the second endpoint. The fix-up index of BC6H and BC7 is
+// stored without its most significant bit, so the encoder must swap the
+// endpoints instead of truncating the index.
+func TestFixUpIndexMostSignificantBit(t *testing.T) {
+	for name, bc := range map[string]bcFormat{"BC6H": bcFmt6, "BC7": bcFmt7} {
+		var block [16][4]uint8
+		for i := range block {
+			block[i] = [4]uint8{0, 0, 0, 255}
+		}
+		// Only the first pixel is bright, so the encoder picks an index of
+		// the bright endpoint for it.
+		block[0] = [4]uint8{200, 160, 120, 255}
+
+		var compressed []byte
+		if bc == bcFmt7 {
+			compressed = compressBc7Block(block)
+		} else {
+			var half [16][4]uint16
+			for i := range block {
+				for c := 0; c < 4; c++ {
+					half[i][c] = float32ToHalf(float32(block[i][c]) / 255.0)
+				}
+			}
+			compressed = compressBc6Block(half)
+		}
+		decoded := decompressBlock(bc, compressed)
+		for c := 0; c < 3; c++ {
+			d := int(decoded[0][0][c]) - int(block[0][c])
+			if d < -12 || d > 12 {
+				t.Errorf("%s: first pixel %v, want %v", name, decoded[0][0], block[0])
+				break
+			}
+		}
+	}
+}

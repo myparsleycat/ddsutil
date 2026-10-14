@@ -612,6 +612,14 @@ func compressBc6Block(block [16][4]uint16) []byte {
 		}
 	}
 
+	// The fix-up index is stored without its most significant bit, so it
+	// must be below 8. Swapping the endpoints and inverting the indices
+	// produces the same palette with the fix-up index in range.
+	if bestIndices&0xF >= 8 {
+		bestE0, bestE1 = bestE1, bestE0
+		bestIndices = ^bestIndices
+	}
+
 	// Assemble the bitstream LSB-first.
 	// Mode 11: 0b00011 LSB-first: 1, 1, 0, 0, 0; endpoints; then indices
 	// (first pixel uses 3 bits as the fix-up, the rest 4 bits).
@@ -751,6 +759,15 @@ func compressBc7Block(block [16][4]uint8) []byte {
 			bestP0, bestP1 = p0, p1
 			bestIndices = indices
 		}
+	}
+
+	// The fix-up index is stored without its most significant bit, so it
+	// must be below 8. The weights are symmetric (w[15-k] = 64 - w[k]), so
+	// swapping the endpoints and inverting the indices decodes identically.
+	if bestIndices&0xF >= 8 {
+		bestE0, bestE1 = bestE1, bestE0
+		bestP0, bestP1 = bestP1, bestP0
+		bestIndices = ^bestIndices
 	}
 
 	// Assemble the bitstream LSB-first.
