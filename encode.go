@@ -87,7 +87,8 @@ func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageForm
 	if numMipmaps < 1 {
 		numMipmaps = 1
 	}
-	if numMipmaps > maxMipmaps && maxMipmaps > 0 {
+	// Encode validated the surface, so maxMipmaps is at least 1.
+	if numMipmaps > maxMipmaps {
 		return nil, &SurfaceError{Kind: SurfaceErrorUnexpectedMipmapCount, Mipmaps: numMipmaps, MaxTotalMipmaps: maxMipmaps}
 	}
 
