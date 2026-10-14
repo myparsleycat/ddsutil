@@ -85,7 +85,9 @@ func SurfaceRgba8FromImageDepth(img *image.RGBA, depth uint32) *SurfaceRgba8 {
 }
 
 // contiguousPix returns the pixels of img as tightly packed rows, copying
-// only if the rows are not contiguous in img.Pix.
+// only if the rows are not contiguous in img.Pix. If img.Pix is too short for
+// img.Rect, the rows that exist are returned and validation reports the
+// missing data.
 func contiguousPix(img *image.RGBA) []uint8 {
 	width, height := img.Rect.Dx(), img.Rect.Dy()
 	rowLength := width * 4
@@ -93,12 +95,19 @@ func contiguousPix(img *image.RGBA) []uint8 {
 		return nil
 	}
 	start := img.PixOffset(img.Rect.Min.X, img.Rect.Min.Y)
+	if start < 0 || start > len(img.Pix) {
+		return nil
+	}
 	if img.Stride == rowLength {
-		return img.Pix[start : start+rowLength*height]
+		return img.Pix[start:min(start+rowLength*height, len(img.Pix))]
 	}
 	pix := make([]uint8, rowLength*height)
 	for y := 0; y < height; y++ {
-		copy(pix[y*rowLength:], img.Pix[start+y*img.Stride:start+y*img.Stride+rowLength])
+		rowStart := start + y*img.Stride
+		if rowStart < 0 || rowStart+rowLength > len(img.Pix) {
+			return pix[:y*rowLength]
+		}
+		copy(pix[y*rowLength:], img.Pix[rowStart:rowStart+rowLength])
 	}
 	return pix
 }

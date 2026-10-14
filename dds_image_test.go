@@ -1,6 +1,7 @@
 package ddsutil
 
 import (
+	"errors"
 	"image"
 	"testing"
 )
@@ -77,5 +78,16 @@ func TestNRGBAFromDdsKeepsStraightAlpha(t *testing.T) {
 	}
 	if c := img.NRGBAAt(1, 1); c.R != 200 || c.G != 100 || c.B != 50 || c.A != 64 {
 		t.Fatalf("NRGBAAt = %v, want {200 100 50 64}", c)
+	}
+}
+
+func TestSurfaceRgba8FromShortImage(t *testing.T) {
+	for _, stride := range []int{16, 32} {
+		img := &image.RGBA{Rect: image.Rect(0, 0, 4, 4), Stride: stride, Pix: make([]uint8, 32)}
+		_, err := DdsFromImage(img, Rgba8Unorm, QualityFast, MipmapsDisabled)
+		var surfaceErr *SurfaceError
+		if !errors.As(err, &surfaceErr) || surfaceErr.Kind != SurfaceErrorNotEnoughData {
+			t.Errorf("stride %d: err = %v, want NotEnoughData", stride, err)
+		}
 	}
 }
