@@ -167,12 +167,14 @@ func principalAxis(points [][4]float32, n int) (mean, axis [4]float32) {
 		mean[c] /= float32(len(points))
 	}
 
-	var cov [4][4]float32
+	// The covariance and power iteration use float64: products of HDR
+	// values near the half float maximum overflow float32.
+	var cov [4][4]float64
 	for _, p := range points {
 		for a := 0; a < n; a++ {
-			da := p[a] - mean[a]
+			da := float64(p[a] - mean[a])
 			for b := 0; b < n; b++ {
-				cov[a][b] += da * (p[b] - mean[b])
+				cov[a][b] += da * float64(p[b]-mean[b])
 			}
 		}
 	}
@@ -188,26 +190,42 @@ func principalAxis(points [][4]float32, n int) (mean, axis [4]float32) {
 		return mean, axis
 	}
 	v := cov[start]
+	if !normalize(&v, n) {
+		return mean, axis
+	}
 	for iteration := 0; iteration < 8; iteration++ {
-		var next [4]float32
+		var next [4]float64
 		for a := 0; a < n; a++ {
 			for b := 0; b < n; b++ {
 				next[a] += cov[a][b] * v[b]
 			}
 		}
-		var norm float32
-		for c := 0; c < n; c++ {
-			norm += next[c] * next[c]
-		}
-		if norm <= 0 {
+		if !normalize(&next, n) {
 			return mean, axis
 		}
-		norm = float32(math.Sqrt(float64(norm)))
-		for c := 0; c < n; c++ {
-			v[c] = next[c] / norm
-		}
+		v = next
 	}
-	return mean, v
+	for c := 0; c < n; c++ {
+		axis[c] = float32(v[c])
+	}
+	return mean, axis
+}
+
+// normalize scales the first n components of v to unit length. It returns
+// false if v has no finite, nonzero length.
+func normalize(v *[4]float64, n int) bool {
+	var norm float64
+	for c := 0; c < n; c++ {
+		norm += v[c] * v[c]
+	}
+	if !(norm > 0) || math.IsInf(norm, 0) {
+		return false
+	}
+	norm = math.Sqrt(norm)
+	for c := 0; c < n; c++ {
+		v[c] /= norm
+	}
+	return true
 }
 
 // axisExtremes returns the points on the principal axis that bound the

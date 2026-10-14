@@ -155,3 +155,32 @@ func BenchmarkGenerateMipmaps(b *testing.B) {
 		}
 	}
 }
+
+func TestEncodeBC6hLargeHdrValues(t *testing.T) {
+	// The covariance of values this large overflows float32 when squared.
+	const value = 60000
+	data := make([]float32, 4*4*4)
+	for i := 0; i < 16; i++ {
+		data[i*4+i%2] = value
+		data[i*4+3] = 1
+	}
+	surface := &SurfaceRgba32Float{Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 1, Data: data}
+	for _, quality := range []Quality{QualityFast, QualityNormal, QualitySlow} {
+		encoded, err := surface.Encode(BC6hRgbUfloat, quality, MipmapsDisabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := encoded.DecodeRgbaf32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 16; i++ {
+			for c := 0; c < 3; c++ {
+				want := data[i*4+c]
+				if got := decoded.Data[i*4+c]; math.Abs(float64(got-want)) > value/100 {
+					t.Fatalf("quality %v: pixel %d channel %d = %v, want %v", quality, i, c, got, want)
+				}
+			}
+		}
+	}
+}
