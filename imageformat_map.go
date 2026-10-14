@@ -356,8 +356,10 @@ func (s *Surface) ToDds() (*Dds, error) {
 	}
 
 	if format, ok := dxgiFromImageFormat(s.ImageFormat); ok {
+		// For cube maps, NewDxgi stores the number of cubes (layers / 6) in
+		// the DX10 header, which must be at least 1.
 		var arrayLayers uint32
-		if s.Layers > 1 && s.Layers != 6 {
+		if s.Layers > 1 {
 			arrayLayers = s.Layers
 		}
 		resourceDimension := D3D10ResourceDimensionTexture2D

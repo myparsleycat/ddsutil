@@ -54,6 +54,8 @@ The API now follows Go naming conventions. Update callers as follows:
   mixed up depth slices.
 - BC6H and BC7 blocks whose first pixel was closest to the second endpoint
   decoded that pixel with the wrong color.
+- `Surface.ToDds` wrote cube maps with a DX10 array size of 0, which is
+  invalid and rejected by `NewDdsReader`.
 - A header declaring 2^32-1 mipmaps made `LayerData` loop for seconds, and
   size computations wrapped around for textures over 4 GiB.
 
