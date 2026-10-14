@@ -76,20 +76,20 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 		return nil, ErrShortFile
 	}
 	dds := Dds{Header: header, Header10: header10}
-	format := dds.GetFormat()
+	format := dds.Format()
 	if format == nil {
 		return nil, ErrUnsupportedFormat
 	}
-	imageFormat, err := DDSImageFormat(&dds)
+	imageFormat, err := dds.ImageFormat()
 	if err != nil {
 		return nil, err
 	}
 	metadata := DdsMetadata{
-		Width:       dds.GetWidth(),
-		Height:      dds.GetHeight(),
-		Depth:       dds.GetDepth(),
+		Width:       dds.Width(),
+		Height:      dds.Height(),
+		Depth:       dds.Depth(),
 		Layers:      arrayLayerCount(&dds),
-		Mipmaps:     dds.GetNumMipmapLevels(),
+		Mipmaps:     dds.NumMipmapLevels(),
 		ImageFormat: imageFormat,
 	}
 	if metadata.Width == 0 {
@@ -327,7 +327,7 @@ func (r *DdsReader) mipLayout(layer, mipmap uint32) (ddsMipLayout, error) {
 		if !ok {
 			return ddsMipLayout{}, ErrUnsupportedFormat
 		}
-		pitchHeight := r.format.GetPitchHeight()
+		pitchHeight := r.format.PitchHeight()
 		if pitchHeight == 0 {
 			return ddsMipLayout{}, ErrUnsupportedFormat
 		}
@@ -366,7 +366,7 @@ func (r *DdsReader) mipLayout(layer, mipmap uint32) (ddsMipLayout, error) {
 }
 
 func (r *DdsReader) mipPitch(width uint32) (uint32, bool) {
-	pitch, ok := r.format.GetPitch(width)
+	pitch, ok := r.format.Pitch(width)
 	if !ok || pitch == 0 {
 		return 0, false
 	}
@@ -447,7 +447,7 @@ func rgbaLength(width, height, depth uint32) (int, error) {
 
 func uint64ToInt(value uint64) (int, error) {
 	if value > uint64(maxIntValue()) {
-		return 0, fmt.Errorf("DDS payload size exceeds addressable memory: %w", ErrOutOfBounds)
+		return 0, fmt.Errorf("DDS payload size exceeds addressable memory: %w", ErrTooLarge)
 	}
 	return int(value), nil
 }

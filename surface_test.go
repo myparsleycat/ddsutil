@@ -393,3 +393,34 @@ func TestCalculateOffsetOutOfBounds(t *testing.T) {
 		t.Error("a surface with 0 mipmaps still has a base level")
 	}
 }
+
+func TestMipmapsGeneratedExact(t *testing.T) {
+	surface := &SurfaceRgba8{Width: 8, Height: 8, Depth: 1, Layers: 1, Mipmaps: 1, Data: make([]uint8, 8*8*4)}
+	for _, tc := range []struct {
+		mipmaps Mipmaps
+		want    uint32
+	}{
+		{MipmapsDisabled, 1},
+		{Mipmaps{}, 1},
+		{MipmapsGeneratedAutomatic, 4},
+		{MipmapsGeneratedExact(0), 1},
+		{MipmapsGeneratedExact(1), 1},
+		{MipmapsGeneratedExact(3), 3},
+	} {
+		got, err := surface.Encode(Rgba8Unorm, QualityFast, tc.mipmaps)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.mipmaps, err)
+		}
+		if got.Mipmaps != tc.want {
+			t.Errorf("%v: mipmaps = %d, want %d", tc.mipmaps, got.Mipmaps, tc.want)
+		}
+	}
+
+	_, err := surface.Encode(Rgba8Unorm, QualityFast, MipmapsGeneratedExact(5))
+	if e := surfaceErr(err); e == nil || e.Kind != SurfaceErrorUnexpectedMipmapCount || e.MaxTotalMipmaps != 4 {
+		t.Errorf("5 mipmaps for an 8x8 surface: err = %v, want UnexpectedMipmapCount", err)
+	}
+	if s := MipmapsGeneratedExact(3).String(); s != "MipmapsGeneratedExact(3)" {
+		t.Errorf("String() = %q", s)
+	}
+}

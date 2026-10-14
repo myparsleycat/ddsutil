@@ -9,35 +9,35 @@ package ddsutil
 // DataFormat is implemented by both D3DFormat and DxgiFormat. Methods that
 // may have no meaningful value return (T, bool).
 type DataFormat interface {
-	// GetPitch gets the number of bytes required to store one row of data.
-	GetPitch(width uint32) (uint32, bool)
+	// Pitch gets the number of bytes required to store one row of data.
+	Pitch(width uint32) (uint32, bool)
 
-	// GetPitchHeight gets the height of each row of data. Normally it is 1,
+	// PitchHeight gets the height of each row of data. Normally it is 1,
 	// but for block compressed textures, each row is 4 pixels high.
-	GetPitchHeight() uint32
+	PitchHeight() uint32
 
-	// GetBitsPerPixel gets the number of bits required to store a single
+	// BitsPerPixel gets the number of bits required to store a single
 	// pixel. It is only defined for uncompressed formats.
-	GetBitsPerPixel() (uint8, bool)
+	BitsPerPixel() (uint8, bool)
 
-	// GetBlockSize gets a block compression format's block size, and is only
+	// BlockSize gets a block compression format's block size, and is only
 	// defined for compressed formats.
-	GetBlockSize() (uint32, bool)
+	BlockSize() (uint32, bool)
 
-	// GetFourCC gets the fourcc code for this format, if known.
-	GetFourCC() (FourCC, bool)
+	// FourCC gets the fourcc code for this format, if known.
+	FourCC() (FourCC, bool)
 
 	// RequiresExtension returns true if the DX10 extension is required to
 	// use this format.
 	RequiresExtension() bool
 
-	// GetMinimumMipmapSizeInBytes gets the minimum mipmap size in bytes.
+	// MinimumMipmapSizeInBytes gets the minimum mipmap size in bytes.
 	// Even if they go all the way down to 1x1, there is a minimum number of
 	// bytes based on bits per pixel or blocksize.
-	GetMinimumMipmapSizeInBytes() (uint32, bool)
+	MinimumMipmapSizeInBytes() (uint32, bool)
 }
 
-// defaultPitchHeight is the shared default implementation of GetPitchHeight.
+// defaultPitchHeight is the shared default implementation of PitchHeight.
 func defaultPitchHeight(blockSize uint32, hasBlockSize bool) uint32 {
 	if hasBlockSize {
 		return 4
@@ -46,7 +46,7 @@ func defaultPitchHeight(blockSize uint32, hasBlockSize bool) uint32 {
 }
 
 // defaultMinimumMipmapSizeInBytes is the shared default implementation of
-// GetMinimumMipmapSizeInBytes.
+// MinimumMipmapSizeInBytes.
 func defaultMinimumMipmapSizeInBytes(bpp uint8, hasBPP bool, blockSize uint32, hasBlockSize bool) (uint32, bool) {
 	if hasBPP {
 		return (uint32(bpp) + 7) / 8, true
@@ -57,7 +57,7 @@ func defaultMinimumMipmapSizeInBytes(bpp uint8, hasBPP bool, blockSize uint32, h
 	return 0, false
 }
 
-// defaultPitch is the shared implementation of GetPitch. It returns false if
+// defaultPitch is the shared implementation of Pitch. It returns false if
 // the format has no pitch or the pitch does not fit in 32 bits.
 func defaultPitch(width uint32, packedPair bool, bpp uint8, hasBPP bool, blockSize uint32, hasBlockSize bool) (uint32, bool) {
 	var pitch uint64

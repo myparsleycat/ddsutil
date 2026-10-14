@@ -20,30 +20,51 @@ const (
 // Mipmaps specifies how many mipmaps to generate.
 // Mipmaps are counted starting from the base level,
 // so a surface with only the full resolution base level has 1 mipmap.
-type Mipmaps uint32
+//
+// The zero value is MipmapsDisabled.
+type Mipmaps struct {
+	mode  mipmapsMode
+	count uint32
+}
+
+type mipmapsMode uint8
 
 const (
-	// MipmapsDisabled means no mipmapping; only the base mip level is used.
-	MipmapsDisabled Mipmaps = 0
-	// MipmapsFromSurface uses the number of mipmaps specified in the input surface.
-	MipmapsFromSurface Mipmaps = 1
-	// MipmapsGeneratedAutomatic generates mipmaps starting from the base level
-	// until dimensions can be reduced no further.
-	MipmapsGeneratedAutomatic Mipmaps = 2
-	// MipmapsGeneratedExact generates mipmaps to create a surface with the
-	// desired number of mipmaps. A value of 0 or 1 is equivalent to MipmapsDisabled.
-	MipmapsGeneratedExact Mipmaps = 3
+	mipmapsDisabled mipmapsMode = iota
+	mipmapsFromSurface
+	mipmapsGeneratedAutomatic
+	mipmapsGeneratedExact
 )
 
-// GeneratedExact returns a Mipmaps value that generates exactly count mipmaps.
-func GeneratedExact(count uint32) Mipmaps { return Mipmaps(4 + count) }
+var (
+	// MipmapsDisabled means no mipmapping; only the base mip level is used.
+	MipmapsDisabled = Mipmaps{mode: mipmapsDisabled}
+	// MipmapsFromSurface uses the mipmaps of the input surface.
+	MipmapsFromSurface = Mipmaps{mode: mipmapsFromSurface}
+	// MipmapsGeneratedAutomatic generates mipmaps starting from the base level
+	// until dimensions can be reduced no further.
+	MipmapsGeneratedAutomatic = Mipmaps{mode: mipmapsGeneratedAutomatic}
+)
 
-// GeneratedExactCount returns the count for a GeneratedExact value, or 0.
-func (m Mipmaps) GeneratedExactCount() (uint32, bool) {
-	if m >= Mipmaps(4) {
-		return uint32(m) - 4, true
+// MipmapsGeneratedExact generates mipmaps to create a surface with count
+// mipmaps. A count of 0 or 1 is equivalent to MipmapsDisabled.
+func MipmapsGeneratedExact(count uint32) Mipmaps {
+	return Mipmaps{mode: mipmapsGeneratedExact, count: count}
+}
+
+// String implements fmt.Stringer.
+func (m Mipmaps) String() string {
+	switch m.mode {
+	case mipmapsDisabled:
+		return "MipmapsDisabled"
+	case mipmapsFromSurface:
+		return "MipmapsFromSurface"
+	case mipmapsGeneratedAutomatic:
+		return "MipmapsGeneratedAutomatic"
+	case mipmapsGeneratedExact:
+		return "MipmapsGeneratedExact(" + itoa(int(m.count)) + ")"
 	}
-	return 0, false
+	return "Mipmaps(?)"
 }
 
 // ImageFormat is a supported image format for encoding and decoding.

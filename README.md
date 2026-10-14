@@ -49,8 +49,8 @@ dds2, err := ddsutil.DdsFromImage(img, ddsutil.BC7RgbaUnorm,
     ddsutil.QualityNormal, ddsutil.MipmapsGeneratedAutomatic)
 
 // Work with the raw file container.
-fmt.Println(dds.GetWidth(), dds.GetHeight())
-data0, _ := dds.GetData(0) // mip chain of array layer 0
+fmt.Println(dds.Width(), dds.Height())
+data0, _ := dds.LayerData(0) // mip chain of array layer 0
 ```
 
 For large textures, use `DdsReader` to read or decode only the mip needed by

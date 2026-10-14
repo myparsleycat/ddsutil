@@ -21,48 +21,58 @@ type Dds struct {
 	Header Header
 	// Header10 is the optional DX10 extension header.
 	Header10 *Header10
-	// Data is the texture data. The slice returned by GetData aliases this
+	// Data is the texture data. The slice returned by LayerData aliases this
 	// slice, so mutating it mutates the Dds.
 	Data []byte
 }
 
-// NewD3dParams are the parameters for NewD3D.
-type NewD3dParams struct {
-	Height       uint32
-	Width        uint32
-	Depth        *uint32
-	Format       D3DFormat
-	MipmapLevels *uint32
-	Caps2        *Caps2
+// D3DParams are the parameters for NewD3D and NewHeaderD3D. Zero values
+// select the defaults.
+type D3DParams struct {
+	Height uint32
+	Width  uint32
+	// Depth is the depth of a volume texture, or 0 for a 2D texture.
+	Depth  uint32
+	Format D3DFormat
+	// MipmapLevels is the number of mip levels, or 0 to omit the mip level
+	// count (a single level).
+	MipmapLevels uint32
+	Caps2        Caps2
 }
 
-// NewDxgiParams are the parameters for NewDXGI.
-type NewDxgiParams struct {
-	Height            uint32
-	Width             uint32
-	Depth             *uint32
-	Format            DxgiFormat
-	MipmapLevels      *uint32
-	ArrayLayers       *uint32
-	Caps2             *Caps2
+// DxgiParams are the parameters for NewDxgi and NewHeaderDxgi. Zero values
+// select the defaults.
+type DxgiParams struct {
+	Height uint32
+	Width  uint32
+	// Depth is the depth of a volume texture, or 0 for a 2D texture.
+	Depth  uint32
+	Format DxgiFormat
+	// MipmapLevels is the number of mip levels, or 0 to omit the mip level
+	// count (a single level).
+	MipmapLevels uint32
+	// ArrayLayers is the number of array layers (6 per cubemap), or 0 for a
+	// single layer.
+	ArrayLayers       uint32
+	Caps2             Caps2
 	IsCubemap         bool
 	ResourceDimension D3D10ResourceDimension
 	AlphaMode         AlphaMode
 }
 
 // NewD3D creates a new DirectDraw Surface with a D3DFormat.
-func NewD3D(params NewD3dParams) (*Dds, error) {
-	pitch, ok := params.Format.GetPitch(params.Width)
+func NewD3D(params D3DParams) (*Dds, error) {
+	pitch, ok := params.Format.Pitch(params.Width)
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
-	size, ok := getTextureSize(&pitch, nil, params.Format.GetPitchHeight(), params.Height, params.Depth)
+	size, ok := getTextureSize(&pitch, nil, params.Format.PitchHeight(), params.Height, optionalU32(params.Depth))
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
 
-	mml := u32Val(params.MipmapLevels, 1)
-	minMipmapSize, ok := params.Format.GetMinimumMipmapSizeInBytes()
+	mml := max(params.MipmapLevels, 1)
+	minMipmapSize, ok := params.Format.MinimumMipmapSizeInBytes()
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
@@ -76,14 +86,7 @@ func NewD3D(params NewD3dParams) (*Dds, error) {
 		return nil, err
 	}
 
-	header, err := NewHeaderD3D(
-		params.Height,
-		params.Width,
-		params.Depth,
-		params.Format,
-		params.MipmapLevels,
-		params.Caps2,
-	)
+	header, err := NewHeaderD3D(params)
 	if err != nil {
 		return nil, err
 	}
@@ -95,21 +98,21 @@ func NewD3D(params NewD3dParams) (*Dds, error) {
 	}, nil
 }
 
-// NewDXGI creates a new DirectDraw Surface with a DxgiFormat.
-func NewDXGI(params NewDxgiParams) (*Dds, error) {
-	arraysize := u32Val(params.ArrayLayers, 1)
+// NewDxgi creates a new DirectDraw Surface with a DxgiFormat.
+func NewDxgi(params DxgiParams) (*Dds, error) {
+	arraysize := max(params.ArrayLayers, 1)
 
-	pitch, ok := params.Format.GetPitch(params.Width)
+	pitch, ok := params.Format.Pitch(params.Width)
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
-	size, ok := getTextureSize(&pitch, nil, params.Format.GetPitchHeight(), params.Height, params.Depth)
+	size, ok := getTextureSize(&pitch, nil, params.Format.PitchHeight(), params.Height, optionalU32(params.Depth))
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
 
-	mml := u32Val(params.MipmapLevels, 1)
-	minMipmapSize, ok := params.Format.GetMinimumMipmapSizeInBytes()
+	mml := max(params.MipmapLevels, 1)
+	minMipmapSize, ok := params.Format.MinimumMipmapSizeInBytes()
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
@@ -137,15 +140,7 @@ func NewDXGI(params NewDxgiParams) (*Dds, error) {
 		params.AlphaMode,
 	)
 
-	header, err := NewHeaderDXGI(
-		params.Height,
-		params.Width,
-		params.Depth,
-		params.Format,
-		params.MipmapLevels,
-		params.ArrayLayers,
-		params.Caps2,
-	)
+	header, err := NewHeaderDxgi(params)
 	if err != nil {
 		return nil, err
 	}
@@ -208,18 +203,18 @@ func (d *Dds) Write(w io.Writer) error {
 	return mapIO(err)
 }
 
-// GetD3DFormat attempts to get the format of this DDS, presuming it is a
+// D3DFormat attempts to get the format of this DDS, presuming it is a
 // D3DFormat.
-func (d *Dds) GetD3DFormat() (D3DFormat, bool) {
+func (d *Dds) D3DFormat() (D3DFormat, bool) {
 	// FIXME: some d3d formats are equivalent to some dxgi formats, but we
 	// don't have a conversion between them yet. Right now we will yield
 	// false if the format is dxgi, but later on we should try to convert.
 	return D3DFormatTryFromPixelFormat(&d.Header.SPF)
 }
 
-// GetDXGIFormat attempts to get the format of this DDS, presuming it is a
+// DxgiFormat attempts to get the format of this DDS, presuming it is a
 // DxgiFormat.
-func (d *Dds) GetDXGIFormat() (DxgiFormat, bool) {
+func (d *Dds) DxgiFormat() (DxgiFormat, bool) {
 	// FIXME: some d3d formats are equivalent to some dxgi formats, but we
 	// don't have a conversion between them yet. Right now we will yield
 	// false if the format is d3d, but later on we should try to convert.
@@ -229,29 +224,29 @@ func (d *Dds) GetDXGIFormat() (DxgiFormat, bool) {
 	return DxgiFormatTryFromPixelFormat(&d.Header.SPF)
 }
 
-// GetFormat gets the format of the DDS as a DataFormat interface
+// Format gets the format of the DDS as a DataFormat interface
 // (type-erasure). Returns nil if the format is unknown.
-func (d *Dds) GetFormat() DataFormat {
-	if dxgi, ok := d.GetDXGIFormat(); ok {
+func (d *Dds) Format() DataFormat {
+	if dxgi, ok := d.DxgiFormat(); ok {
 		return dxgi
 	}
-	if d3d, ok := d.GetD3DFormat(); ok {
+	if d3d, ok := d.D3DFormat(); ok {
 		return d3d
 	}
 	return nil
 }
 
-func (d *Dds) GetWidth() uint32  { return d.Header.Width }
-func (d *Dds) GetHeight() uint32 { return d.Header.Height }
+func (d *Dds) Width() uint32  { return d.Header.Width }
+func (d *Dds) Height() uint32 { return d.Header.Height }
 
-func (d *Dds) GetDepth() uint32 {
+func (d *Dds) Depth() uint32 {
 	return u32Val(d.Header.Depth, 1)
 }
 
-func (d *Dds) GetBitsPerPixel() (uint32, bool) {
+func (d *Dds) BitsPerPixel() (uint32, bool) {
 	// Try format first
-	if format := d.GetFormat(); format != nil {
-		if bpp, ok := format.GetBitsPerPixel(); ok {
+	if format := d.Format(); format != nil {
+		if bpp, ok := format.BitsPerPixel(); ok {
 			return uint32(bpp), true
 		}
 	}
@@ -262,10 +257,10 @@ func (d *Dds) GetBitsPerPixel() (uint32, bool) {
 	return 0, false
 }
 
-func (d *Dds) GetPitch() (uint32, bool) {
+func (d *Dds) Pitch() (uint32, bool) {
 	// Try format first
-	if format := d.GetFormat(); format != nil {
-		if pitch, ok := format.GetPitch(d.Header.Width); ok {
+	if format := d.Format(); format != nil {
+		if pitch, ok := format.Pitch(d.Header.Width); ok {
 			return pitch, true
 		}
 	}
@@ -275,44 +270,44 @@ func (d *Dds) GetPitch() (uint32, bool) {
 	}
 
 	// Then try to calculate it ourselves
-	if bpp, ok := d.GetBitsPerPixel(); ok {
-		return (bpp*d.GetWidth() + 7) / 8, true
+	if bpp, ok := d.BitsPerPixel(); ok {
+		return (bpp*d.Width() + 7) / 8, true
 	}
 	return 0, false
 }
 
-func (d *Dds) GetPitchHeight() uint32 {
-	if format := d.GetFormat(); format != nil {
-		return format.GetPitchHeight()
+func (d *Dds) PitchHeight() uint32 {
+	if format := d.Format(); format != nil {
+		return format.PitchHeight()
 	}
 	return 1
 }
 
-// GetMainTextureSize returns the size in bytes of the base mip level of one
+// MainTextureSize returns the size in bytes of the base mip level of one
 // array layer, or false if it cannot be determined.
-func (d *Dds) GetMainTextureSize() (uint64, bool) {
+func (d *Dds) MainTextureSize() (uint64, bool) {
 	var pitchPtr *uint32
-	if pitch, ok := d.GetPitch(); ok {
+	if pitch, ok := d.Pitch(); ok {
 		pitchPtr = &pitch
 	}
 	return getTextureSize(
 		pitchPtr,
 		d.Header.LinearSize,
-		d.GetPitchHeight(),
+		d.PitchHeight(),
 		d.Header.Height,
 		d.Header.Depth,
 	)
 }
 
-// GetArrayStride returns the size in bytes of one array layer including all
+// ArrayStride returns the size in bytes of one array layer including all
 // of its mip levels.
-func (d *Dds) GetArrayStride() (uint64, error) {
-	size, ok := d.GetMainTextureSize()
+func (d *Dds) ArrayStride() (uint64, error) {
+	size, ok := d.MainTextureSize()
 	if !ok {
 		return 0, ErrUnsupportedFormat
 	}
-	mml := d.GetNumMipmapLevels()
-	minMipmapSize := d.GetMinMipmapSizeInBytes()
+	mml := d.NumMipmapLevels()
+	minMipmapSize := d.MinMipmapSizeInBytes()
 	stride, ok := getArrayStride(size, minMipmapSize, mml)
 	if !ok {
 		return 0, ErrTooLarge
@@ -320,7 +315,7 @@ func (d *Dds) GetArrayStride() (uint64, error) {
 	return stride, nil
 }
 
-func (d *Dds) GetNumArrayLayers() uint32 {
+func (d *Dds) NumArrayLayers() uint32 {
 	if d.Header10 != nil {
 		return d.Header10.ArraySize
 	}
@@ -330,29 +325,29 @@ func (d *Dds) GetNumArrayLayers() uint32 {
 	return 1 // just the 1 layer
 }
 
-func (d *Dds) GetNumMipmapLevels() uint32 {
+func (d *Dds) NumMipmapLevels() uint32 {
 	if d.Header.MipMapCount != nil {
 		return *d.Header.MipMapCount
 	}
 	return 1 // just the main image
 }
 
-func (d *Dds) GetMinMipmapSizeInBytes() uint32 {
-	if format := d.GetFormat(); format != nil {
-		if min, ok := format.GetMinimumMipmapSizeInBytes(); ok {
+func (d *Dds) MinMipmapSizeInBytes() uint32 {
+	if format := d.Format(); format != nil {
+		if min, ok := format.MinimumMipmapSizeInBytes(); ok {
 			return min
 		}
 	}
-	if bpp, ok := d.GetBitsPerPixel(); ok {
+	if bpp, ok := d.BitsPerPixel(); ok {
 		return (bpp + 7) / 8
 	}
 	return 1
 }
 
-// GetData gets a reference to the data at the given arrayLayer (which should
+// LayerData gets a reference to the data at the given arrayLayer (which should
 // be 0 for textures with just one image). The returned slice aliases d.Data,
 // so mutations to it are visible in the Dds.
-func (d *Dds) GetData(arrayLayer uint32) ([]byte, error) {
+func (d *Dds) LayerData(arrayLayer uint32) ([]byte, error) {
 	offset, size, err := d.getOffsetAndSize(arrayLayer)
 	if err != nil {
 		return nil, err
@@ -366,10 +361,10 @@ func (d *Dds) GetData(arrayLayer uint32) ([]byte, error) {
 
 func (d *Dds) getOffsetAndSize(arrayLayer uint32) (uint64, uint64, error) {
 	// Verify request bounds
-	if arrayLayer >= d.GetNumArrayLayers() {
+	if arrayLayer >= d.NumArrayLayers() {
 		return 0, 0, ErrOutOfBounds
 	}
-	arrayStride, err := d.GetArrayStride()
+	arrayStride, err := d.ArrayStride()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -433,9 +428,9 @@ func getArrayStride(textureSize uint64, minMipmapSize, mipmapLevels uint32) (uin
 func (d *Dds) String() string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Dds:")
-	if d3dformat, ok := d.GetD3DFormat(); ok {
+	if d3dformat, ok := d.D3DFormat(); ok {
 		fmt.Fprintf(&b, "  Format: %s\n", d3dformat)
-	} else if dxgiformat, ok := d.GetDXGIFormat(); ok {
+	} else if dxgiformat, ok := d.DxgiFormat(); ok {
 		fmt.Fprintf(&b, "  Format: %s\n", dxgiformat)
 	} else if d.Header.SPF.FourCC != nil {
 		fmt.Fprintf(&b, "  Format: FOURCC=%s (Unknown)\n", *d.Header.SPF.FourCC)

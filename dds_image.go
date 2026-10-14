@@ -124,9 +124,9 @@ func (s *SurfaceRgba8) IntoImage() (*image.RGBA, error) {
 	return img, nil
 }
 
-// GetImage returns the image corresponding to the specified layer, depth
+// Image returns the image corresponding to the specified layer, depth
 // level, and mipmap, or nil if the range is not fully contained.
-func (s *SurfaceRgba8) GetImage(layer, depthLevel, mipmap uint32) *image.RGBA {
+func (s *SurfaceRgba8) Image(layer, depthLevel, mipmap uint32) *image.RGBA {
 	data := s.Get(layer, depthLevel, mipmap)
 	if data == nil {
 		return nil

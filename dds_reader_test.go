@@ -31,7 +31,7 @@ func TestDdsReaderReadsOnlySelectedMip(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := reader.Metadata()
-	if metadata.Width != 64 || metadata.Height != 32 || metadata.Depth != 1 || metadata.Layers != 1 || metadata.Mipmaps != encoded.GetNumMipmapLevels() || metadata.ImageFormat != BC7RgbaUnormSrgb {
+	if metadata.Width != 64 || metadata.Height != 32 || metadata.Depth != 1 || metadata.Layers != 1 || metadata.Mipmaps != encoded.NumMipmapLevels() || metadata.ImageFormat != BC7RgbaUnormSrgb {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	tracked.ranges = nil
@@ -56,7 +56,7 @@ func TestDdsReaderReadsOnlySelectedMip(t *testing.T) {
 
 func TestDdsReaderReadsClassicDdsMip(t *testing.T) {
 	mipmaps := uint32(2)
-	dds, err := NewD3D(NewD3dParams{Width: 8, Height: 8, Format: D3DFormatDXT1, MipmapLevels: &mipmaps})
+	dds, err := NewD3D(D3DParams{Width: 8, Height: 8, Format: D3DFormatDXT1, MipmapLevels: mipmaps})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestDdsReaderDecodeMipToMatchesNearest(t *testing.T) {
 }
 
 func TestDdsReaderSelectsArrayLayer(t *testing.T) {
-	encoded := encodeReaderFixture(t, 8, 8, 2, BC7RgbaUnorm, GeneratedExact(2))
+	encoded := encodeReaderFixture(t, 8, 8, 2, BC7RgbaUnorm, MipmapsGeneratedExact(2))
 	raw := ddsBytes(t, encoded)
 	reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
@@ -168,18 +168,18 @@ func TestDdsReaderSelectsArrayLayer(t *testing.T) {
 func TestDdsReaderSelectsCubemapFace(t *testing.T) {
 	const width, height, layers = uint32(8), uint32(8), uint32(6)
 	input := readerFixtureSurface(width, height, 1, layers)
-	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, GeneratedExact(2))
+	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, MipmapsGeneratedExact(2))
 	if err != nil {
 		t.Fatal(err)
 	}
 	mipmaps := encoded.Mipmaps
 	arrayLayers := layers
-	dds, err := NewDXGI(NewDxgiParams{
+	dds, err := NewDxgi(DxgiParams{
 		Height:            height,
 		Width:             width,
 		Format:            DxgiFormatBC7_UNorm,
-		MipmapLevels:      &mipmaps,
-		ArrayLayers:       &arrayLayers,
+		MipmapLevels:      mipmaps,
+		ArrayLayers:       arrayLayers,
 		IsCubemap:         true,
 		ResourceDimension: D3D10ResourceDimensionTexture2D,
 		AlphaMode:         AlphaModeStraight,
@@ -208,7 +208,7 @@ func TestDdsReaderSelectsCubemapFace(t *testing.T) {
 func TestDdsReaderReadsVolumeMip(t *testing.T) {
 	const width, height, depth = uint32(8), uint32(8), uint32(4)
 	input := readerFixtureSurface(width, height, depth, 1)
-	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, GeneratedExact(2))
+	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, MipmapsGeneratedExact(2))
 	if err != nil {
 		t.Fatal(err)
 	}

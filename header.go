@@ -213,14 +213,9 @@ func DefaultHeader() Header {
 }
 
 // NewHeaderD3D creates a header for a new DDS with a D3DFormat.
-func NewHeaderD3D(
-	height uint32,
-	width uint32,
-	depth *uint32,
-	format D3DFormat,
-	mipmapLevels *uint32,
-	caps2 *Caps2,
-) (Header, error) {
+func NewHeaderD3D(params D3DParams) (Header, error) {
+	height, width, format := params.Height, params.Width, params.Format
+	depth, mipmapLevels := optionalU32(params.Depth), optionalU32(params.MipmapLevels)
 	header := DefaultHeader()
 	header.Height = height
 	header.Width = width
@@ -238,12 +233,10 @@ func NewHeaderD3D(
 	}
 
 	// Let the caller handle caps2.
-	if caps2 != nil {
-		header.Caps2 = *caps2
-	}
+	header.Caps2 = params.Caps2
 
-	_, compressed := format.GetBlockSize()
-	pitch, ok := format.GetPitch(width)
+	_, compressed := format.BlockSize()
+	pitch, ok := format.Pitch(width)
 	if !ok {
 		return header, ErrUnsupportedFormat
 	}
@@ -252,7 +245,7 @@ func NewHeaderD3D(
 
 	if compressed {
 		header.Flags.Insert(HeaderFlagsLINEARSIZE)
-		pitchHeight := format.GetPitchHeight()
+		pitchHeight := format.PitchHeight()
 		rawHeight := (height + (pitchHeight - 1)) / pitchHeight
 		linearSize, ok := mulU32(pitch, rawHeight, d)
 		if !ok {
@@ -267,16 +260,10 @@ func NewHeaderD3D(
 	return header, nil
 }
 
-// NewHeaderDXGI creates a header for a new DDS with a DxgiFormat.
-func NewHeaderDXGI(
-	height uint32,
-	width uint32,
-	depth *uint32,
-	format DxgiFormat,
-	mipmapLevels *uint32,
-	arrayLayers *uint32,
-	caps2 *Caps2,
-) (Header, error) {
+// NewHeaderDxgi creates a header for a new DDS with a DxgiFormat.
+func NewHeaderDxgi(params DxgiParams) (Header, error) {
+	height, width, format := params.Height, params.Width, params.Format
+	depth, mipmapLevels := optionalU32(params.Depth), optionalU32(params.MipmapLevels)
 	header := DefaultHeader()
 	header.Height = height
 	header.Width = width
@@ -292,17 +279,15 @@ func NewHeaderDXGI(
 		header.Caps.Insert(CapsCOMPLEX)
 		header.Flags.Insert(HeaderFlagsDEPTH)
 	}
-	if arrayLayers != nil && *arrayLayers > 1 {
+	if params.ArrayLayers > 1 {
 		header.Caps.Insert(CapsCOMPLEX)
 	}
 
 	// Let the caller handle caps2.
-	if caps2 != nil {
-		header.Caps2 = *caps2
-	}
+	header.Caps2 = params.Caps2
 
-	_, compressed := format.GetBlockSize()
-	pitch, ok := format.GetPitch(width)
+	_, compressed := format.BlockSize()
+	pitch, ok := format.Pitch(width)
 	if !ok {
 		return header, ErrUnsupportedFormat
 	}
@@ -311,7 +296,7 @@ func NewHeaderDXGI(
 
 	if compressed {
 		header.Flags.Insert(HeaderFlagsLINEARSIZE)
-		pitchHeight := format.GetPitchHeight()
+		pitchHeight := format.PitchHeight()
 		rawHeight := (height + (pitchHeight - 1)) / pitchHeight
 		linearSize, ok := mulU32(pitch, rawHeight, d)
 		if !ok {

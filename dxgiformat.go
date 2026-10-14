@@ -274,22 +274,22 @@ func DxgiFormatFromU32(v uint32) (DxgiFormat, bool) {
 	return f, ok
 }
 
-// GetPitch implements DataFormat. See
+// Pitch implements DataFormat. See
 // https://msdn.microsoft.com/en-us/library/bb943991.aspx
-func (f DxgiFormat) GetPitch(width uint32) (uint32, bool) {
-	bpp, hasBPP := f.GetBitsPerPixel()
-	blockSize, hasBlockSize := f.GetBlockSize()
+func (f DxgiFormat) Pitch(width uint32) (uint32, bool) {
+	bpp, hasBPP := f.BitsPerPixel()
+	blockSize, hasBlockSize := f.BlockSize()
 	return defaultPitch(width, f == DxgiFormatR8G8_B8G8_UNorm || f == DxgiFormatG8R8_G8B8_UNorm, bpp, hasBPP, blockSize, hasBlockSize)
 }
 
-// GetPitchHeight implements DataFormat.
-func (f DxgiFormat) GetPitchHeight() uint32 {
-	bs, ok := f.GetBlockSize()
+// PitchHeight implements DataFormat.
+func (f DxgiFormat) PitchHeight() uint32 {
+	bs, ok := f.BlockSize()
 	return defaultPitchHeight(bs, ok)
 }
 
-// GetBitsPerPixel implements DataFormat.
-func (f DxgiFormat) GetBitsPerPixel() (uint8, bool) {
+// BitsPerPixel implements DataFormat.
+func (f DxgiFormat) BitsPerPixel() (uint8, bool) {
 	switch f {
 	case DxgiFormatUnknown:
 		return 0, false
@@ -436,8 +436,8 @@ func (f DxgiFormat) GetBitsPerPixel() (uint8, bool) {
 	}
 }
 
-// GetBlockSize implements DataFormat.
-func (f DxgiFormat) GetBlockSize() (uint32, bool) {
+// BlockSize implements DataFormat.
+func (f DxgiFormat) BlockSize() (uint32, bool) {
 	switch f {
 	case DxgiFormatBC1_Typeless, DxgiFormatBC1_UNorm, DxgiFormatBC1_UNorm_sRGB:
 		return 8, true
@@ -469,10 +469,10 @@ func (f DxgiFormat) GetBlockSize() (uint32, bool) {
 	}
 }
 
-// GetFourCC implements DataFormat. Note: we never use this. For Dxgi formats,
+// FourCC implements DataFormat. Note: we never use this. For Dxgi formats,
 // we set FourCC to DX10 and set the format in the header10 field. But these
 // were the FourCCs that were used prior to the header10 extension to DDS.
-func (f DxgiFormat) GetFourCC() (FourCC, bool) {
+func (f DxgiFormat) FourCC() (FourCC, bool) {
 	switch f {
 	case DxgiFormatBC1_UNorm:
 		return FourCC(FourCCBC1_UNORM), true
@@ -590,10 +590,10 @@ func (f DxgiFormat) RequiresExtension() bool {
 	}
 }
 
-// GetMinimumMipmapSizeInBytes implements DataFormat.
-func (f DxgiFormat) GetMinimumMipmapSizeInBytes() (uint32, bool) {
-	bpp, hasBPP := f.GetBitsPerPixel()
-	bs, hasBS := f.GetBlockSize()
+// MinimumMipmapSizeInBytes implements DataFormat.
+func (f DxgiFormat) MinimumMipmapSizeInBytes() (uint32, bool) {
+	bpp, hasBPP := f.BitsPerPixel()
+	bs, hasBS := f.BlockSize()
 	return defaultMinimumMipmapSizeInBytes(bpp, hasBPP, bs, hasBS)
 }
 

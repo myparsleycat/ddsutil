@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func mustNewD3D(t *testing.T, params NewD3dParams) *Dds {
+func mustNewD3D(t *testing.T, params D3DParams) *Dds {
 	t.Helper()
 	dds, err := NewD3D(params)
 	if err != nil {
@@ -20,7 +20,7 @@ func mustNewD3D(t *testing.T, params NewD3dParams) *Dds {
 // TestNewD3DHeaderBytes checks the exact byte layout of a minimal A8R8G8B8
 // file against the DDS specification.
 func TestNewD3DHeaderBytes(t *testing.T) {
-	dds := mustNewD3D(t, NewD3dParams{
+	dds := mustNewD3D(t, D3DParams{
 		Height: 4,
 		Width:  4,
 		Format: D3DFormatA8R8G8B8,
@@ -89,7 +89,7 @@ func TestNewD3DHeaderBytes(t *testing.T) {
 }
 
 func TestRoundTripD3D(t *testing.T) {
-	dds := mustNewD3D(t, NewD3dParams{
+	dds := mustNewD3D(t, D3DParams{
 		Height: 8,
 		Width:  8,
 		Format: D3DFormatA8R8G8B8,
@@ -105,21 +105,21 @@ func TestRoundTripD3D(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if dds2.GetWidth() != 8 || dds2.GetHeight() != 8 {
-		t.Errorf("dims = %dx%d, want 8x8", dds2.GetWidth(), dds2.GetHeight())
+	if dds2.Width() != 8 || dds2.Height() != 8 {
+		t.Errorf("dims = %dx%d, want 8x8", dds2.Width(), dds2.Height())
 	}
 	if dds2.Header10 != nil {
 		t.Error("Header10 should be nil for D3D format")
 	}
-	f, ok := dds2.GetD3DFormat()
+	f, ok := dds2.D3DFormat()
 	if !ok || f != D3DFormatA8R8G8B8 {
-		t.Errorf("GetD3DFormat = %v, %v; want A8R8G8B8, true", f, ok)
+		t.Errorf("D3DFormat = %v, %v; want A8R8G8B8, true", f, ok)
 	}
-	bpp, ok := dds2.GetBitsPerPixel()
+	bpp, ok := dds2.BitsPerPixel()
 	if !ok || bpp != 32 {
 		t.Errorf("bpp = %d, %v; want 32, true", bpp, ok)
 	}
-	pitch, ok := dds2.GetPitch()
+	pitch, ok := dds2.Pitch()
 	if !ok || pitch != 32 {
 		t.Errorf("pitch = %d, %v; want 32, true", pitch, ok)
 	}
@@ -130,11 +130,11 @@ func TestRoundTripD3D(t *testing.T) {
 
 func TestNewD3DCompressedLinearSize(t *testing.T) {
 	mml := uint32(3)
-	dds := mustNewD3D(t, NewD3dParams{
+	dds := mustNewD3D(t, D3DParams{
 		Height:       8,
 		Width:        8,
 		Format:       D3DFormatDXT5,
-		MipmapLevels: &mml,
+		MipmapLevels: mml,
 	})
 	if dds.Header.LinearSize == nil || *dds.Header.LinearSize != 64 {
 		t.Errorf("linear_size = %v, want 64", dds.Header.LinearSize)
@@ -146,13 +146,13 @@ func TestNewD3DCompressedLinearSize(t *testing.T) {
 	if len(dds.Data) != 96 {
 		t.Errorf("data size = %d, want 96", len(dds.Data))
 	}
-	if dds.GetNumMipmapLevels() != 3 {
-		t.Errorf("mipmap levels = %d, want 3", dds.GetNumMipmapLevels())
+	if dds.NumMipmapLevels() != 3 {
+		t.Errorf("mipmap levels = %d, want 3", dds.NumMipmapLevels())
 	}
 }
 
-func TestNewDXGIAndHeader10(t *testing.T) {
-	dds, err := NewDXGI(NewDxgiParams{
+func TestNewDxgiAndHeader10(t *testing.T) {
+	dds, err := NewDxgi(DxgiParams{
 		Height:            8,
 		Width:             8,
 		Format:            DxgiFormatBC1_UNorm,
@@ -160,7 +160,7 @@ func TestNewDXGIAndHeader10(t *testing.T) {
 		AlphaMode:         AlphaModeUnknown,
 	})
 	if err != nil {
-		t.Fatalf("NewDXGI failed: %v", err)
+		t.Fatalf("NewDxgi failed: %v", err)
 	}
 	if dds.Header10 == nil {
 		t.Fatal("Header10 is nil")
@@ -193,7 +193,7 @@ func TestNewDXGIAndHeader10(t *testing.T) {
 	if dds2.Header10 == nil || dds2.Header10.DxgiFormat != DxgiFormatBC1_UNorm {
 		t.Error("Header10 not preserved through round trip")
 	}
-	if got := dds2.GetNumArrayLayers(); got != 1 {
+	if got := dds2.NumArrayLayers(); got != 1 {
 		t.Errorf("array layers = %d, want 1", got)
 	}
 }
@@ -201,24 +201,24 @@ func TestNewDXGIAndHeader10(t *testing.T) {
 func TestCubemapArrayLayers(t *testing.T) {
 	c2 := Caps2CUBEMAP | Caps2CUBEMAP_ALLFACES
 	layers := uint32(6)
-	dds, err := NewDXGI(NewDxgiParams{
+	dds, err := NewDxgi(DxgiParams{
 		Height:            4,
 		Width:             4,
 		Format:            DxgiFormatR8G8B8A8_UNorm,
-		ArrayLayers:       &layers,
+		ArrayLayers:       layers,
 		IsCubemap:         true,
-		Caps2:             &c2,
+		Caps2:             c2,
 		ResourceDimension: D3D10ResourceDimensionTexture2D,
 		AlphaMode:         AlphaModeUnknown,
 	})
 	if err != nil {
-		t.Fatalf("NewDXGI failed: %v", err)
+		t.Fatalf("NewDxgi failed: %v", err)
 	}
-	// Note: NewDXGI stores the *number of cubemaps* (array_layers / 6) in
-	// header10.array_size, and GetNumArrayLayers reads header10.array_size
+	// Note: NewDxgi stores the *number of cubemaps* (array_layers / 6) in
+	// header10.array_size, and NumArrayLayers reads header10.array_size
 	// when a DX10 header is present. So a single cubemap reports 1 here,
 	// unlike the caps2-based path below.
-	if got := dds.GetNumArrayLayers(); got != 1 {
+	if got := dds.NumArrayLayers(); got != 1 {
 		t.Errorf("array layers = %d, want 1", got)
 	}
 	if dds.Header10 == nil || dds.Header10.MiscFlag != MiscFlagTEXTURECUBE {
@@ -229,15 +229,15 @@ func TestCubemapArrayLayers(t *testing.T) {
 		t.Errorf("data size = %d, want %d", len(dds.Data), 6*64)
 	}
 	// Layer access
-	data, err := dds.GetData(0)
+	data, err := dds.LayerData(0)
 	if err != nil {
-		t.Fatalf("GetData(0) failed: %v", err)
+		t.Fatalf("LayerData(0) failed: %v", err)
 	}
 	if len(data) != 64 {
 		t.Errorf("layer size = %d, want 64", len(data))
 	}
-	if _, err := dds.GetData(1); !errors.Is(err, ErrOutOfBounds) {
-		t.Errorf("GetData(1) err = %v, want ErrOutOfBounds", err)
+	if _, err := dds.LayerData(1); !errors.Is(err, ErrOutOfBounds) {
+		t.Errorf("LayerData(1) err = %v, want ErrOutOfBounds", err)
 	}
 }
 
@@ -245,20 +245,20 @@ func TestCubemapArrayLayers(t *testing.T) {
 // layer count is derived from the CUBEMAP caps2 flag.
 func TestCubemapArrayLayersCaps2(t *testing.T) {
 	c2 := Caps2CUBEMAP | Caps2CUBEMAP_ALLFACES
-	dds := mustNewD3D(t, NewD3dParams{
+	dds := mustNewD3D(t, D3DParams{
 		Height: 4,
 		Width:  4,
 		Format: D3DFormatA8R8G8B8,
-		Caps2:  &c2,
+		Caps2:  c2,
 	})
-	if got := dds.GetNumArrayLayers(); got != 6 {
+	if got := dds.NumArrayLayers(); got != 6 {
 		t.Errorf("array layers = %d, want 6", got)
 	}
 	if len(dds.Data) != 64 {
 		t.Errorf("data size = %d, want 64", len(dds.Data))
 	}
-	if _, err := dds.GetData(5); !errors.Is(err, ErrOutOfBounds) {
-		t.Errorf("GetData(5) err = %v, want ErrOutOfBounds", err)
+	if _, err := dds.LayerData(5); !errors.Is(err, ErrOutOfBounds) {
+		t.Errorf("LayerData(5) err = %v, want ErrOutOfBounds", err)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestReadErrors(t *testing.T) {
 	}
 	// Truncated in the middle of the header (after the size field validates):
 	// must surface as ErrShortFile.
-	full := mustNewD3D(t, NewD3dParams{Height: 4, Width: 4, Format: D3DFormatA8R8G8B8})
+	full := mustNewD3D(t, D3DParams{Height: 4, Width: 4, Format: D3DFormatA8R8G8B8})
 	var fullBuf bytes.Buffer
 	if err := full.Write(&fullBuf); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -328,8 +328,8 @@ func TestDxgiFormatTryFromPixelFormat(t *testing.T) {
 	}
 }
 
-func TestGetFormatPrefersDXGI(t *testing.T) {
-	dds, err := NewDXGI(NewDxgiParams{
+func TestFormatPrefersDxgi(t *testing.T) {
+	dds, err := NewDxgi(DxgiParams{
 		Height:            4,
 		Width:             4,
 		Format:            DxgiFormatR8G8B8A8_UNorm,
@@ -337,26 +337,26 @@ func TestGetFormatPrefersDXGI(t *testing.T) {
 		AlphaMode:         AlphaModeUnknown,
 	})
 	if err != nil {
-		t.Fatalf("NewDXGI failed: %v", err)
+		t.Fatalf("NewDxgi failed: %v", err)
 	}
-	f := dds.GetFormat()
+	f := dds.Format()
 	if f == nil {
-		t.Fatal("GetFormat returned nil")
+		t.Fatal("Format returned nil")
 	}
 	if _, ok := f.(DxgiFormat); !ok {
-		t.Errorf("GetFormat returned %T, want DxgiFormat", f)
+		t.Errorf("Format returned %T, want DxgiFormat", f)
 	}
 	if f.RequiresExtension() {
 		t.Error("R8G8B8A8_UNorm should not require DX10 extension")
 	}
 }
 
-func TestGetPitchSpecialCases(t *testing.T) {
-	p, ok := (D3DFormatR8G8_B8G8).GetPitch(5)
+func TestPitchSpecialCases(t *testing.T) {
+	p, ok := (D3DFormatR8G8_B8G8).Pitch(5)
 	if !ok || p != 12 { // ((5+1)>>1)*4
 		t.Errorf("R8G8_B8G8 pitch(5) = %d %v, want 12", p, ok)
 	}
-	p, ok = (DxgiFormatBC7_UNorm).GetPitch(1)
+	p, ok = (DxgiFormatBC7_UNorm).Pitch(1)
 	if !ok || p != 16 { // max(1, (1+3)/4) * 16
 		t.Errorf("BC7 pitch(1) = %d %v, want 16", p, ok)
 	}
@@ -364,14 +364,14 @@ func TestGetPitchSpecialCases(t *testing.T) {
 
 func TestVolumeTextureDepth(t *testing.T) {
 	depth := uint32(2)
-	dds := mustNewD3D(t, NewD3dParams{
+	dds := mustNewD3D(t, D3DParams{
 		Height: 4,
 		Width:  4,
-		Depth:  &depth,
+		Depth:  depth,
 		Format: D3DFormatA8R8G8B8,
 	})
-	if dds.GetDepth() != 2 {
-		t.Errorf("depth = %d, want 2", dds.GetDepth())
+	if dds.Depth() != 2 {
+		t.Errorf("depth = %d, want 2", dds.Depth())
 	}
 	if dds.Header.Depth == nil || *dds.Header.Depth != 2 {
 		t.Error("header depth not set")
@@ -399,7 +399,7 @@ func TestDxgiFormatFromU32(t *testing.T) {
 }
 
 func TestStringDebugOutput(t *testing.T) {
-	dds := mustNewD3D(t, NewD3dParams{Height: 2, Width: 2, Format: D3DFormatA8R8G8B8})
+	dds := mustNewD3D(t, D3DParams{Height: 2, Width: 2, Format: D3DFormatA8R8G8B8})
 	s := dds.String()
 	if !bytes.Contains([]byte(s), []byte("A8R8G8B8")) {
 		t.Errorf("debug output missing format name: %q", s)
@@ -420,7 +420,7 @@ func naiveArrayStride(textureSize uint64, minMipmapSize, mipmapLevels uint32) ui
 	return stride
 }
 
-func TestGetArrayStrideMatchesNaiveSum(t *testing.T) {
+func TestArrayStrideMatchesNaiveSum(t *testing.T) {
 	for _, size := range []uint64{0, 1, 3, 8, 16, 100, 4096, 1 << 30, 1 << 40} {
 		for _, minSize := range []uint32{0, 1, 4, 8, 16, 32} {
 			for levels := uint32(0); levels < 40; levels++ {
@@ -449,27 +449,26 @@ func TestHugeMipmapCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stride, err := dds.GetArrayStride()
+	stride, err := dds.ArrayStride()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := naiveArrayStride(32, 8, 3) + uint64(0xFFFFFFFF-3)*8; stride != want {
 		t.Fatalf("stride = %d, want %d", stride, want)
 	}
-	if _, err := dds.GetData(0); !errors.Is(err, ErrOutOfBounds) {
-		t.Fatalf("GetData error = %v, want ErrOutOfBounds", err)
+	if _, err := dds.LayerData(0); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("LayerData error = %v, want ErrOutOfBounds", err)
 	}
 }
 
 func TestSizeOverflow(t *testing.T) {
 	// 65536 x 65536 RGBA32F is 64 GiB per layer: the stride needs 64 bits.
-	mips := uint32(17)
-	header, err := NewHeaderDXGI(65536, 65536, nil, DxgiFormatR32G32B32A32_Float, &mips, nil, nil)
+	header, err := NewHeaderDxgi(DxgiParams{Height: 65536, Width: 65536, Format: DxgiFormatR32G32B32A32_Float, MipmapLevels: 17})
 	if err != nil {
 		t.Fatal(err)
 	}
 	dds := &Dds{Header: header}
-	stride, err := dds.GetArrayStride()
+	stride, err := dds.ArrayStride()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,11 +477,26 @@ func TestSizeOverflow(t *testing.T) {
 	}
 
 	// The linear size of a compressed header is a 32-bit field.
-	if _, err := NewHeaderDXGI(1<<20, 1<<20, nil, DxgiFormatBC7_UNorm, nil, nil, nil); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("NewHeaderDXGI error = %v, want ErrTooLarge", err)
+	if _, err := NewHeaderDxgi(DxgiParams{Height: 1 << 20, Width: 1 << 20, Format: DxgiFormatBC7_UNorm}); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("NewHeaderDxgi error = %v, want ErrTooLarge", err)
 	}
 	// The pitch of a 2^32-1 pixel wide RGBA32F row does not fit in 32 bits.
-	if _, ok := DxgiFormatR32G32B32A32_Float.GetPitch(0xFFFFFFFF); ok {
-		t.Fatal("GetPitch should report overflow")
+	if _, ok := DxgiFormatR32G32B32A32_Float.Pitch(0xFFFFFFFF); ok {
+		t.Fatal("Pitch should report overflow")
+	}
+}
+
+func TestErrorsWrapSentinels(t *testing.T) {
+	if err := InvalidFieldError("width"); !errors.Is(err, ErrInvalidField) || err.Error() != "invalid field: width" {
+		t.Errorf("InvalidFieldError = %v", err)
+	}
+	if err := GeneralError("oops"); !errors.Is(err, ErrGeneral) {
+		t.Errorf("GeneralError = %v", err)
+	}
+	surfaceErr := &SurfaceError{Kind: SurfaceErrorZeroSizedSurface}
+	var err error = &CreateImageError{Kind: CreateImageErrorDecompressSurface, SurfaceErr: surfaceErr}
+	var target *SurfaceError
+	if !errors.As(err, &target) || target != surfaceErr {
+		t.Errorf("CreateImageError does not unwrap to its SurfaceError")
 	}
 }

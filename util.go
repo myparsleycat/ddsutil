@@ -43,6 +43,15 @@ func u32Val(p *uint32, fallback uint32) uint32 {
 	return fallback
 }
 
+// optionalU32 returns nil for 0 and a pointer to v otherwise, mapping a
+// zero-means-unset parameter to an optional header field.
+func optionalU32(v uint32) *uint32 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
 // mulU32 multiplies the factors and reports whether the product fits in a
 // uint32.
 func mulU32(factors ...uint32) (uint32, bool) {

@@ -36,13 +36,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	format, err := ddsutil.DDSImageFormat(dds)
+	format, err := dds.ImageFormat()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "format: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("dimensions: %dx%d, mipmaps: %d, layers: %d, format: %s\n",
-		dds.GetWidth(), dds.GetHeight(), dds.GetNumMipmapLevels(), dds.GetNumArrayLayers(), format)
+		dds.Width(), dds.Height(), dds.NumMipmapLevels(), dds.NumArrayLayers(), format)
 
 	img, err := ddsutil.ImageFromDds(dds, 0)
 	if err != nil {

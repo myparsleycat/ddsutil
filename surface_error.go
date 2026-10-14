@@ -1,7 +1,5 @@
 package ddsutil
 
-import "errors"
-
 // SurfaceError enumerates errors that can occur while encoding or decoding a surface.
 type SurfaceError struct {
 	Kind SurfaceErrorKind
@@ -149,11 +147,17 @@ func (e *CreateDdsError) Error() string {
 
 func (e *CreateDdsError) Unwrap() error { return e.Err }
 
+// Unwrap returns the surface error of a CreateImageErrorDecompressSurface.
+func (e *CreateImageError) Unwrap() error {
+	if e.SurfaceErr == nil {
+		return nil
+	}
+	return e.SurfaceErr
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""
 	}
 	return err.Error()
 }
-
-var errOutOfBounds = errors.New("out of bounds")

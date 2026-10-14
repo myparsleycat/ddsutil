@@ -73,25 +73,25 @@ func (s *SurfaceRgba32Float) surfaceMipmaps() uint32       { return s.Mipmaps }
 func (s *SurfaceRgba32Float) get(l, d, m uint32) []float32 { return s.Get(l, d, m) }
 
 func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageFormat, quality Quality, mipmaps Mipmaps) (*Surface, error) {
+	maxMipmaps := maxMipmapCount(max3(surface.surfaceWidth(), surface.surfaceHeight(), surface.surfaceDepth()))
 	var numMipmaps uint32
-	switch {
-	case mipmaps == MipmapsDisabled:
-		numMipmaps = 1
-	case mipmaps == MipmapsFromSurface:
+	switch mipmaps.mode {
+	case mipmapsFromSurface:
 		numMipmaps = surface.surfaceMipmaps()
-	case mipmaps == MipmapsGeneratedAutomatic:
-		numMipmaps = maxMipmapCount(max3(surface.surfaceWidth(), surface.surfaceHeight(), surface.surfaceDepth()))
-	default:
-		if count, ok := mipmaps.GeneratedExactCount(); ok {
-			numMipmaps = count
-		}
+	case mipmapsGeneratedAutomatic:
+		numMipmaps = maxMipmaps
+	case mipmapsGeneratedExact:
+		numMipmaps = mipmaps.count
 	}
 	// A count of 0 still encodes the base mip level.
 	if numMipmaps < 1 {
 		numMipmaps = 1
 	}
+	if numMipmaps > maxMipmaps && maxMipmaps > 0 {
+		return nil, &SurfaceError{Kind: SurfaceErrorUnexpectedMipmapCount, Mipmaps: numMipmaps, MaxTotalMipmaps: maxMipmaps}
+	}
 
-	useSurface := mipmaps == MipmapsFromSurface
+	useSurface := mipmaps.mode == mipmapsFromSurface
 
 	var surfaceData []byte
 
