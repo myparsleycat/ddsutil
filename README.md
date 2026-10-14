@@ -100,10 +100,13 @@ layers / 6).
 
 ```sh
 go test ./...
+go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s .   # also FuzzDdsReader, FuzzEncodeDecode
+go test -run '^$' -bench . .                             # encode/decode benchmarks
 ```
 
 `golden_test.go` compares container output byte-for-byte against the golden
-reference files in `testdata/`.
+reference files in `testdata/`. CI runs gofmt, `go vet`, the race-enabled
+tests on the minimum and latest Go versions, and each fuzz target.
 
 ## License
 
