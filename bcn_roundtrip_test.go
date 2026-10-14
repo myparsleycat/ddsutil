@@ -1,6 +1,7 @@
 package ddsutil
 
 import (
+	"math/rand"
 	"testing"
 )
 
@@ -357,6 +358,55 @@ func TestFixUpIndexMostSignificantBit(t *testing.T) {
 			if d < -12 || d > 12 {
 				t.Errorf("%s: first pixel %v, want %v", name, decoded[0][0], block[0])
 				break
+			}
+		}
+	}
+}
+
+// TestBc1LayoutMatchesDecoder checks that the error evaluateBc1 reports for a
+// layout equals the error of the block the decoder reconstructs, for both
+// endpoint orders. BC2/BC3 color blocks always decode with the 4-color
+// palette, BC1 blocks pick it only when c0 > c1.
+func TestBc1LayoutMatchesDecoder(t *testing.T) {
+	r := rand.New(rand.NewSource(3))
+	for iteration := 0; iteration < 200; iteration++ {
+		var block [16][4]uint8
+		for i := range block {
+			block[i] = [4]uint8{uint8(r.Intn(256)), uint8(r.Intn(256)), uint8(r.Intn(256)), 255}
+		}
+		c0 := rgb565{uint8(r.Intn(32)), uint8(r.Intn(64)), uint8(r.Intn(32))}
+		c1 := rgb565{uint8(r.Intn(32)), uint8(r.Intn(64)), uint8(r.Intn(32))}
+		for _, tc := range []struct {
+			layout bc1Layout
+			bc     bcFormat
+		}{{bc1Opaque, bcFmt1}, {bc1FourColor, bcFmt3}} {
+			for _, order := range [][2]rgb565{{c0, c1}, {c1, c0}} {
+				fit, ok := evaluateBc1(&block, order[0], order[1], tc.layout)
+				if !ok {
+					t.Fatal("opaque layouts accept every endpoint order")
+				}
+				var packed uint64
+				packed |= uint64(pack565(fit.c0)) | uint64(pack565(fit.c1))<<16
+				for i := 0; i < 16; i++ {
+					packed |= uint64(fit.indices[i]&3) << uint(32+i*2)
+				}
+				var compressed [16]byte
+				colorBlock := compressed[:8]
+				if tc.bc == bcFmt3 {
+					colorBlock = compressed[8:]
+				}
+				for i := 0; i < 8; i++ {
+					colorBlock[i] = byte(packed >> uint(i*8))
+				}
+				decoded := decompressBlock(tc.bc, compressed[:])
+				var err uint64
+				for i := 0; i < 16; i++ {
+					p := decoded[i/4][i%4]
+					err += uint64(colorDistSq([3]uint8{p[0], p[1], p[2]}, [3]uint8{block[i][0], block[i][1], block[i][2]}))
+				}
+				if err != fit.err {
+					t.Fatalf("layout %d: evaluated error %d, decoded error %d", tc.layout, fit.err, err)
+				}
 			}
 		}
 	}

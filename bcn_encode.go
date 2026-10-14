@@ -371,17 +371,37 @@ type bc1Fit struct {
 	err     uint64
 }
 
+// bc1Layout selects the palette layouts a color block may decode with.
+type bc1Layout uint8
+
+const (
+	// bc1Opaque is a BC1 block without transparent pixels: the decoder uses
+	// the 4-color layout when c0 > c1 and the 3-color layout otherwise.
+	bc1Opaque bc1Layout = iota
+	// bc1Transparent is a BC1 block with pixels with alpha < 128, which
+	// requires the 3-color + transparent layout (c0 <= c1).
+	bc1Transparent
+	// bc1FourColor is a BC2/BC3 color block, which the decoder always
+	// interprets with the 4-color layout.
+	bc1FourColor
+)
+
+// fourColor reports whether a block with endpoints c0, c1 decodes with the
+// 4-color layout.
+func (layout bc1Layout) fourColor(c0, c1 rgb565) bool {
+	return layout == bc1FourColor || (layout == bc1Opaque && pack565(c0) > pack565(c1))
+}
+
 // evaluateBc1 assigns the best index to every pixel for the endpoints c0, c1.
-// The decoder uses the 4-color layout when c0 > c1 (or always for BC2/BC3
-// color blocks) and the 3-color + transparent layout otherwise. It returns
-// false if transparent pixels require the 3-color layout but c0 > c1.
-func evaluateBc1(block *[16][4]uint8, c0, c1 rgb565, hasTransparent bool) (bc1Fit, bool) {
-	p0, p1 := pack565(c0), pack565(c1)
-	if hasTransparent && p0 > p1 {
+// It returns false if transparent pixels require the 3-color layout but
+// c0 > c1.
+func evaluateBc1(block *[16][4]uint8, c0, c1 rgb565, layout bc1Layout) (bc1Fit, bool) {
+	hasTransparent := layout == bc1Transparent
+	if hasTransparent && pack565(c0) > pack565(c1) {
 		// Transparent mode requires c0 <= c1.
 		return bc1Fit{}, false
 	}
-	useFourColor := !hasTransparent && p0 > p1
+	useFourColor := layout.fourColor(c0, c1)
 
 	var palette [4][3]uint8
 	if useFourColor {
@@ -418,19 +438,19 @@ func evaluateBc1(block *[16][4]uint8, c0, c1 rgb565, hasTransparent bool) (bc1Fi
 }
 
 // consider replaces best with the evaluation of (c0, c1) if it is better.
-func (best *bc1Fit) consider(block *[16][4]uint8, c0, c1 rgb565, hasTransparent bool) {
-	if fit, ok := evaluateBc1(block, c0, c1, hasTransparent); ok && fit.err < best.err {
+func (best *bc1Fit) consider(block *[16][4]uint8, c0, c1 rgb565, layout bc1Layout) {
+	if fit, ok := evaluateBc1(block, c0, c1, layout); ok && fit.err < best.err {
 		*best = fit
 	}
 }
 
 // refineBc1 solves for the endpoints that best fit the current indices and
 // keeps them while they reduce the error.
-func refineBc1(block *[16][4]uint8, best *bc1Fit, hasTransparent bool) {
+func refineBc1(block *[16][4]uint8, best *bc1Fit, layout bc1Layout) {
 	points := make([][4]float32, 0, 16)
 	weights := make([]float32, 0, 16)
 	for iteration := 0; iteration < 4; iteration++ {
-		fourColor := !hasTransparent && pack565(best.c0) > pack565(best.c1)
+		fourColor := layout.fourColor(best.c0, best.c1)
 		points, weights = points[:0], weights[:0]
 		for i := 0; i < 16; i++ {
 			var w float32
@@ -458,31 +478,30 @@ func refineBc1(block *[16][4]uint8, best *bc1Fit, hasTransparent bool) {
 		}
 		c0, c1 := quantize565(e0), quantize565(e1)
 		previous := best.err
-		best.consider(block, c0, c1, hasTransparent)
-		best.consider(block, c1, c0, hasTransparent)
+		best.consider(block, c0, c1, layout)
+		best.consider(block, c1, c0, layout)
 		if best.err >= previous {
 			return
 		}
 	}
 }
 
-// fitBc1Color finds the best (c0, c1) for the block. hasTransparent
-// indicates the block has pixels with alpha < 128, which requires the
-// 3-color + transparent layout (c0 <= c1). Returns the packed color block.
-func fitBc1Color(block [16][4]uint8, hasTransparent bool, quality Quality) uint64 {
+// fitBc1Color finds the best (c0, c1) for the block with the given layout.
+// Returns the packed color block.
+func fitBc1Color(block [16][4]uint8, layout bc1Layout, quality Quality) uint64 {
 	best := bc1Fit{err: ^uint64(0)}
 
 	// Endpoints on the principal axis of the colors that are visible.
 	points := make([][4]float32, 0, 16)
 	for i := 0; i < 16; i++ {
-		if !hasTransparent || block[i][3] >= 128 {
+		if layout != bc1Transparent || block[i][3] >= 128 {
 			points = append(points, [4]float32{float32(block[i][0]), float32(block[i][1]), float32(block[i][2])})
 		}
 	}
 	lo, hi := axisExtremes(points, 3)
 	c0, c1 := quantize565(hi), quantize565(lo)
-	best.consider(&block, c0, c1, hasTransparent)
-	best.consider(&block, c1, c0, hasTransparent)
+	best.consider(&block, c0, c1, layout)
+	best.consider(&block, c1, c0, layout)
 
 	if quality == QualitySlow {
 		// Every pair of the unique quantized colors in the block.
@@ -504,13 +523,13 @@ func fitBc1Color(block [16][4]uint8, hasTransparent bool, quality Quality) uint6
 		}
 		for _, c0 := range unique[:n] {
 			for _, c1 := range unique[:n] {
-				best.consider(&block, c0, c1, hasTransparent)
+				best.consider(&block, c0, c1, layout)
 			}
 		}
 	}
 
 	if quality != QualityFast {
-		refineBc1(&block, &best, hasTransparent)
+		refineBc1(&block, &best, layout)
 	}
 
 	// Pack: colors first (4 bytes), then 2-bit indices (4 bytes).
@@ -531,7 +550,11 @@ func compressBc1Block(block [16][4]uint8, quality Quality) [8]byte {
 			break
 		}
 	}
-	colorBlock := fitBc1Color(block, hasTransparent, quality)
+	layout := bc1Opaque
+	if hasTransparent {
+		layout = bc1Transparent
+	}
+	colorBlock := fitBc1Color(block, layout, quality)
 	var out [8]byte
 	for i := 0; i < 8; i++ {
 		out[i] = byte(colorBlock >> uint(i*8))
@@ -549,7 +572,7 @@ func compressBc2Block(block [16][4]uint8, quality Quality) [16]byte {
 	for i := 0; i < 16; i++ {
 		alpha |= uint64((uint32(block[i][3])+8)/17) << uint(i*4)
 	}
-	colorBlock := fitBc1Color(block, false, quality)
+	colorBlock := fitBc1Color(block, bc1FourColor, quality)
 	var out [16]byte
 	for i := 0; i < 8; i++ {
 		out[i] = byte(alpha >> uint(i*8))
@@ -736,7 +759,7 @@ func compressBc3Block(block [16][4]uint8, quality Quality) [16]byte {
 		alphas[i] = block[i][3]
 	}
 	alphaBlock := compressSmoothAlpha(alphas, quality)
-	colorBlock := fitBc1Color(block, false, quality)
+	colorBlock := fitBc1Color(block, bc1FourColor, quality)
 	var out [16]byte
 	for i := 0; i < 8; i++ {
 		out[i] = alphaBlock[i]
