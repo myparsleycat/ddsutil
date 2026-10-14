@@ -62,6 +62,12 @@ The API now follows Go naming conventions. Update callers as follows:
 - `SurfaceRgba8FromImage` and its variants ignored `Stride` and `Rect.Min`,
   producing garbled surfaces for sub-images. `IntoImage` now shares the
   surface data without copying, as documented.
+- `ArrayStride`, `LayerData`, `NewD3D` and `NewDxgi` assumed every mip level
+  is a quarter of the previous one, which is wrong for non-square and volume
+  textures (an 8x1 RGBA8 texture with 4 mips was sized 48 bytes instead of
+  60). Sizes are now computed per mip level for known formats.
+- BC2/BC3 color endpoints were scored with the BC1 3-color palette, which
+  these formats never decode with.
 - A header declaring 2^32-1 mipmaps made `LayerData` loop for seconds, and
   size computations wrapped around for textures over 4 GiB.
 

@@ -527,3 +527,57 @@ func TestParseDxgiFormat(t *testing.T) {
 		t.Error("ParseDxgiFormat accepted an unknown name")
 	}
 }
+
+// TestArrayStrideNonSquareAndVolume checks the per-layer size for textures
+// whose mip levels do not shrink by exactly a factor of 4.
+func TestArrayStrideNonSquareAndVolume(t *testing.T) {
+	dds, err := NewDxgi(DxgiParams{Width: 8, Height: 1, Format: DxgiFormatR8G8B8A8_UNorm, MipmapLevels: 4, ArrayLayers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stride, err := dds.ArrayStride()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(32 + 16 + 8 + 4); stride != want || len(dds.Data) != 2*int(want) {
+		t.Errorf("8x1 RGBA8, 4 mips: stride %d, data %d; want %d, %d", stride, len(dds.Data), want, 2*want)
+	}
+
+	volume, err := NewD3D(D3DParams{Width: 4, Height: 4, Depth: 4, Format: D3DFormatA8R8G8B8, MipmapLevels: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stride, err = volume.ArrayStride()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(4*4*4*4 + 2*2*2*4 + 4); stride != want || len(volume.Data) != int(want) {
+		t.Errorf("4x4x4 volume, 3 mips: stride %d, data %d; want %d", stride, len(volume.Data), want)
+	}
+}
+
+// TestArrayStrideMatchesReader checks that the container layer and the
+// streaming reader agree on the layout of encoded surfaces.
+func TestArrayStrideMatchesReader(t *testing.T) {
+	for _, dims := range [][3]uint32{{16, 4, 1}, {4, 16, 1}, {12, 20, 1}, {8, 8, 4}, {32, 1, 1}} {
+		for _, format := range []ImageFormat{Rgba8Unorm, BC1RgbaUnorm, BC7RgbaUnorm} {
+			surface := &SurfaceRgba8{Width: dims[0], Height: dims[1], Depth: dims[2], Layers: 1, Mipmaps: 1,
+				Data: make([]uint8, dims[0]*dims[1]*dims[2]*4)}
+			encoded, err := surface.Encode(format, QualityFast, MipmapsGeneratedAutomatic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dds, err := encoded.ToDds()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stride, err := dds.ArrayStride()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stride != uint64(len(encoded.Data)) {
+				t.Errorf("%v %v: stride %d, encoded size %d", dims, format, stride, len(encoded.Data))
+			}
+		}
+	}
+}

@@ -62,23 +62,15 @@ type DxgiParams struct {
 
 // NewD3D creates a new DirectDraw Surface with a D3DFormat.
 func NewD3D(params D3DParams) (*Dds, error) {
-	pitch, ok := params.Format.Pitch(params.Width)
-	if !ok {
+	if _, ok := params.Format.MinimumMipmapSizeInBytes(); !ok {
 		return nil, ErrUnsupportedFormat
 	}
-	size, ok := getTextureSize(&pitch, nil, params.Format.PitchHeight(), params.Height, optionalU32(params.Depth))
-	if !ok {
-		return nil, ErrUnsupportedFormat
-	}
-
-	mml := max(params.MipmapLevels, 1)
-	minMipmapSize, ok := params.Format.MinimumMipmapSizeInBytes()
-	if !ok {
-		return nil, ErrUnsupportedFormat
-	}
-	arrayStride, ok := getArrayStride(size, minMipmapSize, mml)
-	if !ok {
+	arrayStride, ok, overflow := layerSize(params.Format, params.Width, params.Height, params.Depth, max(params.MipmapLevels, 1))
+	if overflow {
 		return nil, ErrTooLarge
+	}
+	if !ok {
+		return nil, ErrUnsupportedFormat
 	}
 
 	dataSize, err := uint64ToInt(arrayStride)
@@ -102,23 +94,15 @@ func NewD3D(params D3DParams) (*Dds, error) {
 func NewDxgi(params DxgiParams) (*Dds, error) {
 	arraysize := max(params.ArrayLayers, 1)
 
-	pitch, ok := params.Format.Pitch(params.Width)
-	if !ok {
+	if _, ok := params.Format.MinimumMipmapSizeInBytes(); !ok {
 		return nil, ErrUnsupportedFormat
 	}
-	size, ok := getTextureSize(&pitch, nil, params.Format.PitchHeight(), params.Height, optionalU32(params.Depth))
-	if !ok {
-		return nil, ErrUnsupportedFormat
-	}
-
-	mml := max(params.MipmapLevels, 1)
-	minMipmapSize, ok := params.Format.MinimumMipmapSizeInBytes()
-	if !ok {
-		return nil, ErrUnsupportedFormat
-	}
-	arrayStride, ok := getArrayStride(size, minMipmapSize, mml)
-	if !ok {
+	arrayStride, ok, overflow := layerSize(params.Format, params.Width, params.Height, params.Depth, max(params.MipmapLevels, 1))
+	if overflow {
 		return nil, ErrTooLarge
+	}
+	if !ok {
+		return nil, ErrUnsupportedFormat
 	}
 	totalSize, ok := checkedMul(uint64(arraysize), arrayStride)
 	if !ok {
@@ -301,7 +285,18 @@ func (d *Dds) MainTextureSize() (uint64, bool) {
 
 // ArrayStride returns the size in bytes of one array layer including all
 // of its mip levels.
+//
+// For known formats, every mip level's size is computed from its
+// dimensions. Otherwise each level is assumed to be a quarter of the
+// previous one, starting from the header's pitch or linear size.
 func (d *Dds) ArrayStride() (uint64, error) {
+	if format := d.Format(); format != nil {
+		if stride, ok, overflow := layerSize(format, d.Width(), d.Height(), d.Depth(), d.NumMipmapLevels()); ok {
+			return stride, nil
+		} else if overflow {
+			return 0, ErrTooLarge
+		}
+	}
 	size, ok := d.MainTextureSize()
 	if !ok {
 		return 0, ErrUnsupportedFormat
@@ -394,6 +389,56 @@ func getTextureSize(pitch, linearSize *uint32, pitchHeight, height uint32, depth
 		return size, true
 	}
 	return 0, false
+}
+
+// layerSize returns the size in bytes of one array layer of format with the
+// given base dimensions and number of mip levels. ok is false if the format
+// has no pitch; overflow reports a size that does not fit in 64 bits.
+//
+// The mip level count comes from the file header, so the sum is computed in
+// constant time once the dimensions reach 1x1x1.
+func layerSize(format DataFormat, width, height, depth, mipmapLevels uint32) (size uint64, ok, overflow bool) {
+	if width == 0 || height == 0 {
+		return 0, true, false
+	}
+	pitchHeight := uint64(format.PitchHeight())
+	if pitchHeight == 0 {
+		return 0, false, false
+	}
+	minSize, _ := format.MinimumMipmapSizeInBytes()
+	for mip := uint32(0); mip < mipmapLevels; mip++ {
+		w := MipDimension(width, mip)
+		h := MipDimension(height, mip)
+		d := MipDimension(max(depth, 1), mip)
+		pitch, ok := format.Pitch(w)
+		if !ok {
+			return 0, false, false
+		}
+		mipSize, ok := checkedMul(uint64(pitch), (uint64(h)+pitchHeight-1)/pitchHeight)
+		if ok {
+			mipSize, ok = checkedMul(mipSize, uint64(d))
+		}
+		if !ok {
+			return 0, false, true
+		}
+		mipSize = max(mipSize, uint64(minSize))
+		count := uint64(1)
+		if w == 1 && h == 1 && d == 1 {
+			// Every remaining level has the same size.
+			count = uint64(mipmapLevels - mip)
+		}
+		levelsSize, ok := checkedMul(mipSize, count)
+		if ok {
+			size, ok = checkedAdd(size, levelsSize)
+		}
+		if !ok {
+			return 0, false, true
+		}
+		if count > 1 {
+			break
+		}
+	}
+	return size, true, false
 }
 
 // getArrayStride sums the sizes of mipmapLevels mip levels, each a quarter of
