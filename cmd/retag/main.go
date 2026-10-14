@@ -68,14 +68,16 @@ func retag(input, output, formatName string, force bool) error {
 		if oldFormat == nil {
 			return fmt.Errorf("%s: unknown current format, cannot compare data sizes (use -force to retag anyway)", input)
 		}
-		oldSize, oldOK := layerSize(oldFormat, dds)
-		newSize, newOK := layerSize(format, dds)
-		switch {
-		case !oldOK || !newOK:
-			return fmt.Errorf("cannot compare data sizes of %v and %v (use -force to retag anyway)", oldFormat, format)
-		case oldSize != newSize:
-			return fmt.Errorf("%v needs %d bytes per layer but %v has %d (use -force to retag anyway)",
-				format, newSize, oldFormat, oldSize)
+		oldSizes, oldOK := mipSizes(oldFormat, dds)
+		newSizes, newOK := mipSizes(format, dds)
+		if !oldOK || !newOK {
+			return fmt.Errorf("cannot compare data layouts of %v and %v (use -force to retag anyway)", oldFormat, format)
+		}
+		for mip := range oldSizes {
+			if oldSizes[mip] != newSizes[mip] {
+				return fmt.Errorf("%v needs %d bytes for mip %d but %v has %d (use -force to retag anyway)",
+					format, newSizes[mip], mip, oldFormat, oldSizes[mip])
+			}
 		}
 	}
 
@@ -93,24 +95,46 @@ func retag(input, output, formatName string, force bool) error {
 	return nil
 }
 
-// layerSize returns the size in bytes of one array layer of dds stored in
-// format. Mip levels past the 32nd are 1x1x1 like the 32nd, so they are not
-// counted: they match between two formats whenever the 32nd does.
-func layerSize(format ddsutil.DataFormat, dds *ddsutil.Dds) (uint64, bool) {
-	var total uint64
+// mipSizes returns the size in bytes of each mip level of one array layer
+// of dds stored in format. Mip levels past the 32nd are 1x1x1 like the 32nd,
+// so they are not listed: they match between two formats whenever the 32nd
+// does. It returns false for formats whose layout Pitch and PitchHeight do
+// not describe.
+func mipSizes(format ddsutil.DataFormat, dds *ddsutil.Dds) ([]uint64, bool) {
+	if !simpleLayout(format) {
+		return nil, false
+	}
+	var sizes []uint64
 	pitchHeight := format.PitchHeight()
 	for mip := uint32(0); mip < dds.NumMipmapLevels() && mip < 32; mip++ {
 		width := ddsutil.MipDimension(dds.Width(), mip)
 		height := ddsutil.MipDimension(dds.Height(), mip)
 		depth := ddsutil.MipDimension(dds.Depth(), mip)
 		pitch, ok := format.Pitch(width)
-		if !ok {
-			return 0, false
+		if !ok || pitchHeight == 0 {
+			return nil, false
 		}
 		rows := (uint64(height) + uint64(pitchHeight) - 1) / uint64(pitchHeight)
-		total += uint64(pitch) * rows * uint64(depth)
+		sizes = append(sizes, uint64(pitch)*rows*uint64(depth))
 	}
-	return total, true
+	return sizes, true
+}
+
+// simpleLayout reports whether format stores rows of whole pixels or blocks,
+// as Pitch and PitchHeight describe. Planar video formats (e.g. NV12, P010),
+// packed formats with subsampled chroma (e.g. YUY2, Y210) and palettized
+// formats are not, so their sizes cannot be compared.
+func simpleLayout(format ddsutil.DataFormat) bool {
+	switch format {
+	case ddsutil.DxgiFormatNV12, ddsutil.DxgiFormatP010, ddsutil.DxgiFormatP016,
+		ddsutil.DxgiFormatFormat_420_Opaque, ddsutil.DxgiFormatNV11,
+		ddsutil.DxgiFormatP208, ddsutil.DxgiFormatV208, ddsutil.DxgiFormatV408,
+		ddsutil.DxgiFormatYUY2, ddsutil.DxgiFormatY210, ddsutil.DxgiFormatY216,
+		ddsutil.DxgiFormatAI44, ddsutil.DxgiFormatIA44, ddsutil.DxgiFormatP8, ddsutil.DxgiFormatA8P8,
+		ddsutil.D3DFormatUYVY, ddsutil.D3DFormatYUY2:
+		return false
+	}
+	return true
 }
 
 // addHeader10 converts a legacy header to one with a DX10 extension header.

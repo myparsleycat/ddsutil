@@ -100,3 +100,47 @@ func TestRetagThroughSymlink(t *testing.T) {
 		t.Fatal("link target was not retagged")
 	}
 }
+
+// TestRetagComparesEachMip checks layouts whose total sizes match but whose
+// mip levels differ: a 1x3 RGBA16F layer with 2 mips is 24+8 bytes, the same
+// layer in BC2 is 16+16 bytes.
+func TestRetagComparesEachMip(t *testing.T) {
+	dds, err := ddsutil.NewDxgi(ddsutil.DxgiParams{Width: 1, Height: 3, Format: ddsutil.DxgiFormatR16G16B16A16_Float, MipmapLevels: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "in.dds")
+	data, err := dds.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := retag(path, path, "BC2_UNorm", false); err == nil {
+		t.Fatal("retag with a different mip layout succeeded without -force")
+	}
+}
+
+func TestRetagRejectsVideoFormats(t *testing.T) {
+	dds, err := ddsutil.NewDxgi(ddsutil.DxgiParams{Width: 4, Height: 4, Format: ddsutil.DxgiFormatR8G8B8A8_UNorm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dds.Header10.DxgiFormat = ddsutil.DxgiFormatP010
+	path := filepath.Join(t.TempDir(), "in.dds")
+	data, err := dds.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// P010 and Y210 both report 10 bits per pixel, but their layouts differ.
+	if err := retag(path, path, "Y210", false); err == nil {
+		t.Fatal("retag between video formats succeeded without -force")
+	}
+	if err := retag(path, path, "Y210", true); err != nil {
+		t.Fatalf("retag with -force: %v", err)
+	}
+}
