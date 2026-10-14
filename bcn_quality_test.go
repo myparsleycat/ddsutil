@@ -184,3 +184,60 @@ func TestEncodeBC6hLargeHdrValues(t *testing.T) {
 		}
 	}
 }
+
+// blockColorError returns the squared RGB error of encoding the 4x4 block
+// in format with quality.
+func blockColorError(t *testing.T, block []byte, format ImageFormat, quality Quality) uint64 {
+	t.Helper()
+	surface := &SurfaceRgba8{Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 1, Data: block}
+	encoded, err := surface.Encode(format, quality, MipmapsDisabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := encoded.DecodeRgba8()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum uint64
+	for i := 0; i < len(block); i += 4 {
+		for c := i; c < i+3; c++ {
+			d := int64(decoded.Data[c]) - int64(block[c])
+			sum += uint64(d * d)
+		}
+	}
+	return sum
+}
+
+func TestEncodeBc1QualityMonotonic(t *testing.T) {
+	// Each row holds these gray values. The exhaustive QualitySlow search
+	// used to replace the endpoints QualityNormal refines to.
+	gray := []byte{151, 116, 160, 138}
+	fixed := make([]byte, 0, 64)
+	for i := 0; i < 16; i++ {
+		v := gray[i%4]
+		fixed = append(fixed, v, v, v, 255)
+	}
+	blocks := [][]byte{fixed}
+	r := rand.New(rand.NewSource(3))
+	for n := 0; n < 200; n++ {
+		block := make([]byte, 64)
+		base := [3]int{r.Intn(256), r.Intn(256), r.Intn(256)}
+		for i := 0; i < 16; i++ {
+			for c := 0; c < 3; c++ {
+				block[i*4+c] = uint8(min(max(base[c]+r.Intn(81)-40, 0), 255))
+			}
+			block[i*4+3] = 255
+		}
+		blocks = append(blocks, block)
+	}
+	for _, format := range []ImageFormat{BC1RgbaUnorm, BC2RgbaUnorm, BC3RgbaUnorm} {
+		for n, block := range blocks {
+			fast := blockColorError(t, block, format, QualityFast)
+			normal := blockColorError(t, block, format, QualityNormal)
+			slow := blockColorError(t, block, format, QualitySlow)
+			if normal > fast || slow > normal {
+				t.Fatalf("%v block %d: color error fast %d, normal %d, slow %d", format, n, fast, normal, slow)
+			}
+		}
+	}
+}

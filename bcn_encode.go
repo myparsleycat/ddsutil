@@ -520,9 +520,14 @@ func fitBc1Color(block [16][4]uint8, layout bc1Layout, quality Quality) uint64 {
 	c0, c1 := quantize565(hi), quantize565(lo)
 	best.consider(&block, c0, c1, layout)
 	best.consider(&block, c1, c0, layout)
+	if quality != QualityFast {
+		refineBc1(&block, &best, layout)
+	}
 
 	if quality == QualitySlow {
-		// Every pair of the unique quantized colors in the block.
+		// Every pair of the unique quantized colors in the block. They only
+		// replace the refined endpoints above if they fit better, so the
+		// result is never worse than QualityNormal.
 		var unique [16]rgb565
 		n := 0
 		for i := 0; i < 16; i++ {
@@ -544,9 +549,6 @@ func fitBc1Color(block [16][4]uint8, layout bc1Layout, quality Quality) uint64 {
 				best.consider(&block, c0, c1, layout)
 			}
 		}
-	}
-
-	if quality != QualityFast {
 		refineBc1(&block, &best, layout)
 	}
 
