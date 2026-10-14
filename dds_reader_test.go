@@ -54,6 +54,46 @@ func TestDdsReaderReadsOnlySelectedMip(t *testing.T) {
 	}
 }
 
+func TestDdsReaderAlphaMode(t *testing.T) {
+	for _, tc := range []struct {
+		fourCC FourCC
+		want   AlphaMode
+	}{
+		{FourCC(FourCCDXT2), AlphaModePreMultiplied},
+		{FourCC(FourCCDXT3), AlphaModeUnknown},
+		{FourCC(FourCCDXT4), AlphaModePreMultiplied},
+		{FourCC(FourCCDXT5), AlphaModeUnknown},
+	} {
+		dds, err := NewD3D(D3DParams{Width: 4, Height: 4, Format: D3DFormatDXT3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fourCC := tc.fourCC
+		dds.Header.SPF.FourCC = &fourCC
+		raw := ddsBytes(t, dds)
+		reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := reader.Metadata().AlphaMode; got != tc.want {
+			t.Errorf("%v: alpha mode = %v, want %v", tc.fourCC, got, tc.want)
+		}
+	}
+
+	dds, err := NewDxgi(DxgiParams{Width: 4, Height: 4, Format: DxgiFormatR8G8B8A8_UNorm, AlphaMode: AlphaModePreMultiplied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := ddsBytes(t, dds)
+	reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.Metadata().AlphaMode; got != AlphaModePreMultiplied {
+		t.Errorf("DX10: alpha mode = %v, want %v", got, AlphaModePreMultiplied)
+	}
+}
+
 func TestDdsReaderReadsClassicDdsMip(t *testing.T) {
 	mipmaps := uint32(2)
 	dds, err := NewD3D(D3DParams{Width: 8, Height: 8, Format: D3DFormatDXT1, MipmapLevels: mipmaps})

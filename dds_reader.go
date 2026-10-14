@@ -20,6 +20,10 @@ type DdsMetadata struct {
 	Layers      uint32
 	Mipmaps     uint32
 	ImageFormat ImageFormat
+	// AlphaMode is the alpha mode of the DX10 header, or
+	// AlphaModePreMultiplied for the DXT2 and DXT4 FourCCs. It is
+	// AlphaModeUnknown for other files without a DX10 header.
+	AlphaMode AlphaMode
 }
 
 // DdsReader provides random access to individual DDS mip levels without
@@ -91,6 +95,7 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 		Layers:      arrayLayerCount(&dds),
 		Mipmaps:     dds.NumMipmapLevels(),
 		ImageFormat: imageFormat,
+		AlphaMode:   ddsAlphaMode(&dds),
 	}
 	if metadata.Width == 0 {
 		return nil, InvalidFieldError("width")
@@ -131,6 +136,17 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// ddsAlphaMode returns the alpha mode stored in dds.
+func ddsAlphaMode(dds *Dds) AlphaMode {
+	if dds.Header10 != nil {
+		return dds.Header10.AlphaMode
+	}
+	if fourCC := dds.Header.SPF.FourCC; fourCC != nil && (*fourCC == FourCC(FourCCDXT2) || *fourCC == FourCC(FourCCDXT4)) {
+		return AlphaModePreMultiplied
+	}
+	return AlphaModeUnknown
 }
 
 // Metadata returns a copy of the parsed DDS image metadata.

@@ -51,6 +51,8 @@ The API now follows Go naming conventions. Update callers as follows:
 - `ParseDxgiFormat`, which looks up a DXGI format by name.
 - `NRGBAFromDds`, which returns an `image.NRGBA` matching the straight alpha
   stored in DDS files.
+- `DdsMetadata.AlphaMode`, the DX10 alpha mode, or premultiplied for the
+  DXT2 and DXT4 FourCCs.
 
 ### Fixed
 
@@ -82,8 +84,8 @@ The API now follows Go naming conventions. Update callers as follows:
   the expected data size.
 - `dds2png` selects the layer, mip level and depth slice with `-layer`,
   `-mip` and `-slice`, reads only that mip level, writes straight alpha
-  correctly (it was treated as premultiplied), and names the output after the
-  input by default.
+  correctly (it was treated as premultiplied) while still converting files
+  marked as premultiplied, and names the output after the input by default.
 - `retag` accepts any DXGI format name, converts legacy headers to DX10,
   rejects formats with a different data size unless `-force` is given, and
   writes atomically, optionally to `-o`, through symbolic links and keeping
