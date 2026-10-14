@@ -139,8 +139,10 @@ func decodeSurfaceF32(surface *Surface, layerStart, layerEnd, mipmapStart, mipma
 }
 
 // decodedSize returns the number of RGBA channel values in the given layers
-// and mipmaps of surface. Out of range layers and mipmaps count as empty;
-// decoding reports them.
+// and mipmaps of surface, used to preallocate the decoded output. Out of
+// range layers and mipmaps count as empty; decoding reports them. It returns
+// 0 if surface.Data does not hold every requested image, so the header
+// fields alone never decide the size of an allocation.
 func decodedSize(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd uint32) (int, error) {
 	var layerSize uint64
 	for mipmap := mipmapStart; mipmap < mipmapEnd && mipmap < surface.Mipmaps; mipmap++ {
@@ -162,6 +164,16 @@ func decodedSize(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd 
 	size, ok := checkedMul(layerSize, layers)
 	if !ok || size > uint64(maxIntValue()) {
 		return 0, &SurfaceError{Kind: SurfaceErrorPixelCountWouldOverflow, Width: surface.Width, Height: surface.Height, Depth: surface.Depth}
+	}
+	if size == 0 {
+		return 0, nil
+	}
+	// Images are stored in order of layer, mipmap and depth level, so the
+	// last requested image ends after all the others.
+	lastLayer := min(layerEnd, surface.Layers) - 1
+	lastMipmap := min(mipmapEnd, surface.Mipmaps) - 1
+	if surface.Get(lastLayer, MipDimension(surface.Depth, lastMipmap)-1, lastMipmap) == nil {
+		return 0, nil
 	}
 	return int(size), nil
 }

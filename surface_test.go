@@ -47,6 +47,23 @@ func TestDecodeSurfaceTooManyMipmaps(t *testing.T) {
 	}
 }
 
+func TestDecodeSurfaceMissingLayers(t *testing.T) {
+	// Only the first layer is present, so the declared layer count must not
+	// decide the size of the output buffer.
+	surface := &Surface{
+		Width: 512, Height: 512, Depth: 1, Layers: ^uint32(0), Mipmaps: 1,
+		ImageFormat: BC1RgbaUnorm, Data: make([]uint8, 512*512/2),
+	}
+	_, err := surface.DecodeRgba8()
+	if se := surfaceErr(err); se == nil || se.Kind != SurfaceErrorMipmapDataOutOfBounds || se.Layer != 1 {
+		t.Fatalf("DecodeRgba8: expected MipmapDataOutOfBounds for layer 1, got %v", err)
+	}
+	_, err = surface.DecodeRgbaf32()
+	if se := surfaceErr(err); se == nil || se.Kind != SurfaceErrorMipmapDataOutOfBounds || se.Layer != 1 {
+		t.Fatalf("DecodeRgbaf32: expected MipmapDataOutOfBounds for layer 1, got %v", err)
+	}
+}
+
 func TestDecodeLayersMipmapsRgba8SingleMipmap(t *testing.T) {
 	surface := &Surface{
 		Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 3,
