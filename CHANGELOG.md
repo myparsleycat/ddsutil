@@ -35,6 +35,9 @@ The API now follows Go naming conventions. Update callers as follows:
 - Encoding with more mipmaps than the surface dimensions allow returns a
   `SurfaceErrorUnexpectedMipmapCount` error instead of producing a surface
   that fails validation.
+- `NewDxgi` with `IsCubemap` treats `ArrayLayers: 0` as one cube (6 faces)
+  and rejects counts that are not a multiple of 6; it used to write a DX10
+  array size of 0 with data for a single face.
 - The block compressors' `Quality` levels now produce different (better or
   equal) output, see below.
 

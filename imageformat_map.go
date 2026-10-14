@@ -356,8 +356,6 @@ func (s *Surface) ToDds() (*Dds, error) {
 	}
 
 	if format, ok := dxgiFromImageFormat(s.ImageFormat); ok {
-		// For cube maps, NewDxgi stores the number of cubes (layers / 6) in
-		// the DX10 header, which must be at least 1.
 		var arrayLayers uint32
 		if s.Layers > 1 {
 			arrayLayers = s.Layers
@@ -366,7 +364,7 @@ func (s *Surface) ToDds() (*Dds, error) {
 		if s.Depth > 1 {
 			resourceDimension = D3D10ResourceDimensionTexture3D
 		}
-		d, err := NewDxgi(DxgiParams{
+		d, err := newDxgi(DxgiParams{
 			Height:            s.Height,
 			Width:             s.Width,
 			Depth:             depth,
@@ -377,7 +375,7 @@ func (s *Surface) ToDds() (*Dds, error) {
 			IsCubemap:         s.Layers == 6,
 			ResourceDimension: resourceDimension,
 			AlphaMode:         AlphaModeStraight,
-		})
+		}, false)
 		if err != nil {
 			return nil, &CreateDdsError{Kind: CreateDdsErrorDds, Err: err}
 		}
@@ -388,20 +386,21 @@ func (s *Surface) ToDds() (*Dds, error) {
 		if !ok {
 			return nil, &CreateDdsError{Kind: CreateDdsErrorCompressSurface, Err: &SurfaceError{Kind: SurfaceErrorUnsupportedEncodeFormat, Format: s.ImageFormat}}
 		}
-		d, err := NewD3D(D3DParams{
+		d, err := newD3D(D3DParams{
 			Height:       s.Height,
 			Width:        s.Width,
 			Depth:        depth,
 			Format:       format,
 			MipmapLevels: mipmapLevels,
 			Caps2:        caps2,
-		})
+		}, false)
 		if err != nil {
 			return nil, &CreateDdsError{Kind: CreateDdsErrorDds, Err: err}
 		}
 		dds = d
 	}
 
+	// The headers were created without data; copy the surface data.
 	dds.Data = append([]byte(nil), s.Data...)
 
 	return dds, nil

@@ -60,20 +60,14 @@ type DxgiParams struct {
 	AlphaMode         AlphaMode
 }
 
-// NewD3D creates a new DirectDraw Surface with a D3DFormat.
+// NewD3D creates a new DirectDraw Surface with a D3DFormat and zeroed data.
 func NewD3D(params D3DParams) (*Dds, error) {
-	if _, ok := params.Format.MinimumMipmapSizeInBytes(); !ok {
-		return nil, ErrUnsupportedFormat
-	}
-	arrayStride, ok, overflow := layerSize(params.Format, params.Width, params.Height, params.Depth, max(params.MipmapLevels, 1))
-	if overflow {
-		return nil, ErrTooLarge
-	}
-	if !ok {
-		return nil, ErrUnsupportedFormat
-	}
+	return newD3D(params, true)
+}
 
-	dataSize, err := uint64ToInt(arrayStride)
+// newD3D creates the DDS headers and, if allocate is set, zeroed data.
+func newD3D(params D3DParams, allocate bool) (*Dds, error) {
+	dataSize, err := dataSize(params.Format, params.Width, params.Height, params.Depth, params.MipmapLevels, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -83,32 +77,34 @@ func NewD3D(params D3DParams) (*Dds, error) {
 		return nil, err
 	}
 
-	return &Dds{
-		Header:   header,
-		Header10: nil,
-		Data:     make([]byte, dataSize),
-	}, nil
+	dds := &Dds{Header: header}
+	if allocate {
+		dds.Data = make([]byte, dataSize)
+	}
+	return dds, nil
 }
 
-// NewDxgi creates a new DirectDraw Surface with a DxgiFormat.
+// NewDxgi creates a new DirectDraw Surface with a DxgiFormat and zeroed data.
+//
+// For cube maps, ArrayLayers counts faces and must be a multiple of 6; 0
+// selects a single cube.
 func NewDxgi(params DxgiParams) (*Dds, error) {
+	return newDxgi(params, true)
+}
+
+// newDxgi creates the DDS headers and, if allocate is set, zeroed data.
+func newDxgi(params DxgiParams, allocate bool) (*Dds, error) {
+	if params.IsCubemap {
+		if params.ArrayLayers == 0 {
+			params.ArrayLayers = 6
+		}
+		if params.ArrayLayers%6 != 0 {
+			return nil, InvalidFieldError("array layers (cube maps need a multiple of 6)")
+		}
+	}
 	arraysize := max(params.ArrayLayers, 1)
 
-	if _, ok := params.Format.MinimumMipmapSizeInBytes(); !ok {
-		return nil, ErrUnsupportedFormat
-	}
-	arrayStride, ok, overflow := layerSize(params.Format, params.Width, params.Height, params.Depth, max(params.MipmapLevels, 1))
-	if overflow {
-		return nil, ErrTooLarge
-	}
-	if !ok {
-		return nil, ErrUnsupportedFormat
-	}
-	totalSize, ok := checkedMul(uint64(arraysize), arrayStride)
-	if !ok {
-		return nil, ErrTooLarge
-	}
-	dataSize, err := uint64ToInt(totalSize)
+	dataSize, err := dataSize(params.Format, params.Width, params.Height, params.Depth, params.MipmapLevels, arraysize)
 	if err != nil {
 		return nil, err
 	}
@@ -129,11 +125,30 @@ func NewDxgi(params DxgiParams) (*Dds, error) {
 		return nil, err
 	}
 
-	return &Dds{
-		Header:   header,
-		Header10: &header10,
-		Data:     make([]byte, dataSize),
-	}, nil
+	dds := &Dds{Header: header, Header10: &header10}
+	if allocate {
+		dds.Data = make([]byte, dataSize)
+	}
+	return dds, nil
+}
+
+// dataSize returns the size in bytes of layers array layers of format.
+func dataSize(format DataFormat, width, height, depth, mipmapLevels, layers uint32) (int, error) {
+	if _, ok := format.MinimumMipmapSizeInBytes(); !ok {
+		return 0, ErrUnsupportedFormat
+	}
+	arrayStride, ok, overflow := layerSize(format, width, height, depth, max(mipmapLevels, 1))
+	if overflow {
+		return 0, ErrTooLarge
+	}
+	if !ok {
+		return 0, ErrUnsupportedFormat
+	}
+	totalSize, ok := checkedMul(uint64(layers), arrayStride)
+	if !ok {
+		return 0, ErrTooLarge
+	}
+	return uint64ToInt(totalSize)
 }
 
 // Read reads a DDS file from r.

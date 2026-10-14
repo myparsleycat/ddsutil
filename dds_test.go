@@ -581,3 +581,19 @@ func TestArrayStrideMatchesReader(t *testing.T) {
 		}
 	}
 }
+
+func TestNewDxgiCubemapDefaults(t *testing.T) {
+	dds, err := NewDxgi(DxgiParams{Width: 4, Height: 4, Format: DxgiFormatBC1_UNorm, IsCubemap: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dds.Header10.ArraySize != 1 || len(dds.Data) != 6*8 {
+		t.Errorf("default cube map: array size %d, %d bytes; want 1, 48", dds.Header10.ArraySize, len(dds.Data))
+	}
+	if !dds.Header.Caps.Contains(CapsCOMPLEX) {
+		t.Error("cube map header lacks CapsCOMPLEX")
+	}
+	if _, err := NewDxgi(DxgiParams{Width: 4, Height: 4, Format: DxgiFormatBC1_UNorm, IsCubemap: true, ArrayLayers: 4}); !errors.Is(err, ErrInvalidField) {
+		t.Errorf("4 cube faces: err = %v, want ErrInvalidField", err)
+	}
+}
