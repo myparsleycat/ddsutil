@@ -59,14 +59,14 @@ func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Q
 					for i := 0; i < 16; i++ {
 						values[i] = block[i][0]
 					}
-					compressed = compressBc4Block(values)
+					compressed = compressBc4Block(values, bc == bcFmt4S)
 				case bcFmt5, bcFmt5S:
 					var r, g [16]uint8
 					for i := 0; i < 16; i++ {
 						r[i] = block[i][0]
 						g[i] = block[i][1]
 					}
-					compressed = compressBc5Block(r, g)
+					compressed = compressBc5Block(r, g, bc == bcFmt5S)
 				case bcFmt7:
 					compressed = compressBc7Block(block)
 				}
@@ -418,13 +418,13 @@ func compressBc3Block(block [16][4]uint8) []byte {
 // ---------------------------------------------------------------------------
 
 // interpolateBc4 matches bcdec's bc4_block interpolation.
-func interpolateBc4(a0, a1 uint32, isSigned bool) [8]int32 {
+func interpolateBc4(a0, a1 int32, isSigned bool) [8]int32 {
 	var aWeights4 = [4]int32{13107, 26215, 39321, 52429}
 	var aWeights6 = [6]int32{9363, 18724, 28086, 37450, 46812, 56173}
 
 	var alpha [8]int32
-	alpha[0] = int32(a0)
-	alpha[1] = int32(a1)
+	alpha[0] = a0
+	alpha[1] = a1
 	if alpha[0] > alpha[1] {
 		alpha[2] = (aWeights6[5]*alpha[0] + aWeights6[0]*alpha[1] + 32768) >> 16
 		alpha[3] = (aWeights6[4]*alpha[0] + aWeights6[1]*alpha[1] + 32768) >> 16
@@ -451,32 +451,44 @@ func interpolateBc4(a0, a1 uint32, isSigned bool) [8]int32 {
 	return alpha
 }
 
-func compressBc4Block(values [16]uint8) []byte {
+// compressBc4Block encodes one channel of 16 values. For signed blocks the
+// values are the bit patterns of snorm8 values (int8), as stored in the block.
+func compressBc4Block(values [16]uint8, isSigned bool) []byte {
 	// Collect the distinct values as endpoint candidates.
-	var unique []uint32
+	var targets [16]int32
+	var unique []int32
 	var seen [256]bool
 	for i := 0; i < 16; i++ {
-		if !seen[values[i]] {
-			seen[values[i]] = true
-			unique = append(unique, uint32(values[i]))
+		v := int32(values[i])
+		if isSigned {
+			v = int32(int8(values[i]))
+			if v < -127 {
+				// The decoder clamps -128 to -127.
+				v = -127
+			}
+		}
+		targets[i] = v
+		if !seen[uint8(v)] {
+			seen[uint8(v)] = true
+			unique = append(unique, v)
 		}
 	}
 
 	bestError := uint64(0xFFFFFFFFFFFFFFFF)
-	var bestE0, bestE1 uint32
+	var bestE0, bestE1 int32
 	var bestIndices uint64
 
 	for _, a0 := range unique {
 		for _, a1 := range unique {
-			palette := interpolateBc4(a0, a1, false)
+			palette := interpolateBc4(a0, a1, isSigned)
 
 			var err uint64
 			var indices uint64
 			for i := 0; i < 16; i++ {
 				best := 0
-				bestD := absI32(palette[0] - int32(values[i]))
+				bestD := absI32(palette[0] - targets[i])
 				for k := 1; k < 8; k++ {
-					d := absI32(palette[k] - int32(values[i]))
+					d := absI32(palette[k] - targets[i])
 					if d < bestD {
 						bestD = d
 						best = k
@@ -509,9 +521,9 @@ func absI32(v int32) int32 {
 	return v
 }
 
-func compressBc5Block(r, g [16]uint8) []byte {
-	rBlock := compressBc4Block(r)
-	gBlock := compressBc4Block(g)
+func compressBc5Block(r, g [16]uint8, isSigned bool) []byte {
+	rBlock := compressBc4Block(r, isSigned)
+	gBlock := compressBc4Block(g, isSigned)
 	out := make([]byte, 16)
 	copy(out[:8], rBlock)
 	copy(out[8:], gBlock)

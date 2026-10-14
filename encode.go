@@ -241,10 +241,14 @@ func encodeU8(width, height uint32, data []uint8, format ImageFormat, quality Qu
 		return encodeBcn(bcFmt2, width, height, data, quality)
 	case BC3RgbaUnorm, BC3RgbaUnormSrgb:
 		return encodeBcn(bcFmt3, width, height, data, quality)
-	case BC4RUnorm, BC4RSnorm:
+	case BC4RUnorm:
 		return encodeBcn(bcFmt4, width, height, data, quality)
-	case BC5RgUnorm, BC5RgSnorm:
+	case BC4RSnorm:
+		return encodeBcn(bcFmt4S, width, height, unorm8ToSnorm8Slice(data), quality)
+	case BC5RgUnorm:
 		return encodeBcn(bcFmt5, width, height, data, quality)
+	case BC5RgSnorm:
+		return encodeBcn(bcFmt5S, width, height, unorm8ToSnorm8Slice(data), quality)
 	case BC6hRgbUfloat, BC6hRgbSfloat:
 		return encodeBcn(bcFmt6, width, height, data, quality)
 	case BC7RgbaUnorm, BC7RgbaUnormSrgb:
@@ -312,12 +316,16 @@ func encodeF32(width, height uint32, data []float32, format ImageFormat, quality
 	case Rgba8Snorm:
 		return encodeRgbaF32(formatRgba8Snorm, width, height, data)
 	case BC4RSnorm, BC5RgSnorm:
-		// No dedicated encoder for snorm formats.
-		rgba8 := make([]uint8, len(data))
+		// The signed BCn encoders take snorm8 bit patterns.
+		snorm8 := make([]uint8, len(data))
 		for i, f := range data {
-			rgba8[i] = uint8(floatToSnorm8(f))
+			snorm8[i] = uint8(floatToSnorm8(f))
 		}
-		return encodeU8(width, height, rgba8, format, quality)
+		bc := bcFmt4S
+		if format == BC5RgSnorm {
+			bc = bcFmt5S
+		}
+		return encodeBcn(bc, width, height, snorm8, quality)
 	case BC6hRgbUfloat, BC6hRgbSfloat:
 		return encodeBcn(bcFmt6, width, height, data, quality)
 	case R16Float:
@@ -351,4 +359,14 @@ func encodeF32(width, height uint32, data []float32, format ImageFormat, quality
 		}
 		return encodeU8(width, height, rgba8, format, quality)
 	}
+}
+
+// unorm8ToSnorm8Slice maps RGBA8 data to snorm8 bit patterns using the
+// inverse of the remapping applied when decoding snorm formats to RGBA8.
+func unorm8ToSnorm8Slice(data []uint8) []uint8 {
+	out := make([]uint8, len(data))
+	for i, u := range data {
+		out[i] = unorm8ToSnorm8(u)
+	}
+	return out
 }

@@ -40,14 +40,14 @@ func TestBcEncodeDecodeSolid(t *testing.T) {
 				for i := 0; i < 16; i++ {
 					values[i] = block[i][0]
 				}
-				compressed = compressBc4Block(values)
+				compressed = compressBc4Block(values, false)
 			case bcFmt5:
 				var r, g [16]uint8
 				for i := 0; i < 16; i++ {
 					r[i] = block[i][0]
 					g[i] = block[i][1]
 				}
-				compressed = compressBc5Block(r, g)
+				compressed = compressBc5Block(r, g, false)
 			case bcFmt7:
 				compressed = compressBc7Block(block)
 			}
@@ -213,7 +213,9 @@ func TestEncodeDecodeDdsRoundTrip(t *testing.T) {
 		{BC2RgbaUnorm, 10, 4},
 		{BC3RgbaUnorm, 10, 4},
 		{BC4RUnorm, 8, 1},
+		{BC4RSnorm, 8, 1},
 		{BC5RgUnorm, 8, 2},
+		{BC5RgSnorm, 8, 2},
 		{BC6hRgbUfloat, 10, 3},
 		{BC7RgbaUnorm, 4, 4},
 	}
@@ -273,6 +275,46 @@ func TestEncodeDecodeDdsRoundTrip(t *testing.T) {
 			}
 			if maxErr > tc.maxErr {
 				t.Fatalf("max channel error %d exceeds %d", maxErr, tc.maxErr)
+			}
+		})
+	}
+}
+
+// TestSnormEncodeDecodeF32 checks signed BC4/BC5 data, including negative
+// values, survives an RGBAF32 round trip.
+func TestSnormEncodeDecodeF32(t *testing.T) {
+	for _, format := range []ImageFormat{BC4RSnorm, BC5RgSnorm} {
+		format := format
+		t.Run(format.String(), func(t *testing.T) {
+			data := make([]float32, 8*8*4)
+			for y := 0; y < 8; y++ {
+				for x := 0; x < 8; x++ {
+					idx := (y*8 + x) * 4
+					data[idx] = -1.0 + float32(x)*0.25
+					data[idx+1] = 0.75 - float32(y)*0.25
+					data[idx+3] = 1.0
+				}
+			}
+			surface := &SurfaceRgba32Float{Width: 8, Height: 8, Depth: 1, Layers: 1, Mipmaps: 1, Data: data}
+			encoded, err := surface.Encode(format, QualityNormal, MipmapsDisabled)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := encoded.DecodeRgbaf32()
+			if err != nil {
+				t.Fatal(err)
+			}
+			channels := 1
+			if format == BC5RgSnorm {
+				channels = 2
+			}
+			for i := 0; i < len(data); i += 4 {
+				for c := 0; c < channels; c++ {
+					d := decoded.Data[i+c] - data[i+c]
+					if d < -0.05 || d > 0.05 {
+						t.Fatalf("pixel %d channel %d: got %v want %v", i/4, c, decoded.Data[i+c], data[i+c])
+					}
+				}
 			}
 		})
 	}
