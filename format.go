@@ -1,14 +1,19 @@
 package ddsutil
 
 // Quality is the conversion quality when encoding to compressed formats.
+// Uncompressed formats ignore it.
 type Quality uint8
 
 const (
-	// QualityFast is faster exports with slightly lower quality.
+	// QualityFast derives endpoints directly from each block's principal
+	// axis or value range.
 	QualityFast Quality = iota
-	// QualityNormal is normal export speed and quality.
+	// QualityNormal refines the QualityFast endpoints with least squares
+	// fitting or a small local search. It is several times slower than
+	// QualityFast.
 	QualityNormal
-	// QualitySlow is slower exports for slightly higher quality.
+	// QualitySlow adds exhaustive endpoint searches to QualityNormal. It is
+	// around ten times slower than QualityNormal for a small gain.
 	QualitySlow
 )
 

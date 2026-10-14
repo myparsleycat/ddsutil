@@ -7,12 +7,24 @@ package ddsutil
 // quality output tuned independently of the ISPC reference.
 //
 // Encoder strategy per format:
-//   - bcFmt1: exhaustive endpoint search over the block's quantized colors.
-//   - bcFmt2: 4-bit alpha + bcFmt1-style 4-color block.
+//   - bcFmt1: 4-color or 3-color + transparent endpoint search.
+//   - bcFmt2: 4-bit rounded alpha + bcFmt1-style 4-color block.
 //   - bcFmt3: 8-bit alpha endpoints with exact bcdec interpolation + bcFmt1 color.
-//   - bcFmt4/bcFmt5: min/max endpoints with exact bcdec interpolation.
+//   - bcFmt4/bcFmt5: endpoint search with exact bcdec interpolation.
 //   - BC6H: mode 11 (10.10.10 endpoints, no delta compression).
 //   - bcFmt7: mode 6 (7-bit RGBA endpoints, p-bits, 4-bit indices).
+//
+// Quality selects how many endpoint candidates are evaluated per block:
+//   - QualityFast: endpoints from the block's principal axis or value range.
+//   - QualityNormal: QualityFast plus least squares refinement of the
+//     endpoints, or a small search around the value range for alpha.
+//   - QualitySlow: QualityNormal plus an exhaustive search over the block's
+//     own values, all endpoint orientations for BC7 and coordinate descent
+//     for BC6H.
+//
+// Blocks are independent, so block rows are compressed in parallel.
+
+import "math"
 
 // encodeBcn encodes pixel data to a compressed BCn format.
 func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Quality) ([]byte, error) {
@@ -28,51 +40,12 @@ func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Q
 	}
 
 	blockSize := bc.blockSizeInBytes()
-	out := make([]byte, 0, int(width/4)*int(height/4)*blockSize)
+	blocksX := int((width + blockWidth - 1) / blockWidth)
+	blocksY := int((height + blockHeight - 1) / blockHeight)
+	rowBytes := blocksX * blockSize
+	out := make([]byte, blocksY*rowBytes)
 
 	switch bc {
-	case bcFmt1, bcFmt2, bcFmt3, bcFmt4, bcFmt4S, bcFmt5, bcFmt5S, bcFmt7:
-		rgba8, err := channelBytes(data)
-		if err != nil {
-			return nil, err
-		}
-		for y := uint32(0); y < height; y += blockHeight {
-			for x := uint32(0); x < width; x += blockWidth {
-				var block [16][4]uint8
-				for j := uint32(0); j < 4; j++ {
-					for i := uint32(0); i < 4; i++ {
-						idx := ((y+j)*width + x + i) * 4
-						p := rgba8[idx : idx+4]
-						block[j*4+i] = [4]uint8{p[0], p[1], p[2], p[3]}
-					}
-				}
-				var compressed []byte
-				switch bc {
-				case bcFmt1:
-					compressed = compressBc1Block(block)
-				case bcFmt2:
-					compressed = compressBc2Block(block)
-				case bcFmt3:
-					compressed = compressBc3Block(block)
-				case bcFmt4, bcFmt4S:
-					var values [16]uint8
-					for i := 0; i < 16; i++ {
-						values[i] = block[i][0]
-					}
-					compressed = compressBc4Block(values, bc == bcFmt4S)
-				case bcFmt5, bcFmt5S:
-					var r, g [16]uint8
-					for i := 0; i < 16; i++ {
-						r[i] = block[i][0]
-						g[i] = block[i][1]
-					}
-					compressed = compressBc5Block(r, g, bc == bcFmt5S)
-				case bcFmt7:
-					compressed = compressBc7Block(block)
-				}
-				out = append(out, compressed...)
-			}
-		}
 	case bcFmt6:
 		// The BC6H encoder expects the data in half precision floating point.
 		var halfData []uint16
@@ -90,8 +63,10 @@ func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Q
 				halfData[i] = float32ToHalf(float32(b) / 255.0)
 			}
 		}
-		for y := uint32(0); y < height; y += blockHeight {
-			for x := uint32(0); x < width; x += blockWidth {
+		parallelFor(blocksY, blocksX, func(by int) {
+			y := uint32(by * blockHeight)
+			for bx := 0; bx < blocksX; bx++ {
+				x := uint32(bx * blockWidth)
 				var block [16][4]uint16
 				for j := uint32(0); j < 4; j++ {
 					for i := uint32(0); i < 4; i++ {
@@ -99,12 +74,66 @@ func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Q
 						block[j*4+i] = [4]uint16{halfData[idx], halfData[idx+1], halfData[idx+2], halfData[idx+3]}
 					}
 				}
-				out = append(out, compressBc6Block(block)...)
+				compressed := compressBc6Block(block, quality)
+				copy(out[by*rowBytes+bx*blockSize:], compressed[:])
 			}
+		})
+	default:
+		rgba8, err := channelBytes(data)
+		if err != nil {
+			return nil, err
 		}
+		parallelFor(blocksY, blocksX, func(by int) {
+			y := uint32(by * blockHeight)
+			for bx := 0; bx < blocksX; bx++ {
+				x := uint32(bx * blockWidth)
+				var block [16][4]uint8
+				for j := uint32(0); j < 4; j++ {
+					for i := uint32(0); i < 4; i++ {
+						idx := ((y+j)*width + x + i) * 4
+						p := rgba8[idx : idx+4]
+						block[j*4+i] = [4]uint8{p[0], p[1], p[2], p[3]}
+					}
+				}
+				compressBlockU8(bc, &block, quality, out[by*rowBytes+bx*blockSize:])
+			}
+		})
 	}
 
 	return out, nil
+}
+
+// compressBlockU8 compresses an RGBA8 block into dst.
+func compressBlockU8(bc bcFormat, block *[16][4]uint8, quality Quality, dst []byte) {
+	switch bc {
+	case bcFmt1:
+		compressed := compressBc1Block(*block, quality)
+		copy(dst, compressed[:])
+	case bcFmt2:
+		compressed := compressBc2Block(*block, quality)
+		copy(dst, compressed[:])
+	case bcFmt3:
+		compressed := compressBc3Block(*block, quality)
+		copy(dst, compressed[:])
+	case bcFmt4, bcFmt4S:
+		var values [16]uint8
+		for i := 0; i < 16; i++ {
+			values[i] = block[i][0]
+		}
+		compressed := compressBc4Block(values, bc == bcFmt4S, quality)
+		copy(dst, compressed[:])
+	case bcFmt5, bcFmt5S:
+		var r, g [16]uint8
+		for i := 0; i < 16; i++ {
+			r[i] = block[i][0]
+			g[i] = block[i][1]
+		}
+		compressed := compressBc5Block(r, g, bc == bcFmt5S, quality)
+		copy(dst, compressed[:])
+	case bcFmt7:
+		compressed := compressBc7Block(*block, quality)
+		copy(dst, compressed[:])
+	}
 }
 
 // channelBytes converts generic channel data to bytes (used for the u8-based
@@ -116,6 +145,152 @@ func channelBytes[T channel](data []T) ([]uint8, error) {
 	default:
 		return nil, &SurfaceError{Kind: SurfaceErrorUnsupportedEncodeFormat}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+// principalAxis returns the mean and the dominant direction of the first n
+// channels of points. The axis is unit length, or zero if the points do not
+// vary.
+func principalAxis(points [][4]float32, n int) (mean, axis [4]float32) {
+	if len(points) == 0 {
+		return mean, axis
+	}
+	for _, p := range points {
+		for c := 0; c < n; c++ {
+			mean[c] += p[c]
+		}
+	}
+	for c := 0; c < n; c++ {
+		mean[c] /= float32(len(points))
+	}
+
+	var cov [4][4]float32
+	for _, p := range points {
+		for a := 0; a < n; a++ {
+			da := p[a] - mean[a]
+			for b := 0; b < n; b++ {
+				cov[a][b] += da * (p[b] - mean[b])
+			}
+		}
+	}
+
+	// Power iteration starting from the column with the largest variance.
+	start := 0
+	for c := 1; c < n; c++ {
+		if cov[c][c] > cov[start][start] {
+			start = c
+		}
+	}
+	if cov[start][start] <= 0 {
+		return mean, axis
+	}
+	v := cov[start]
+	for iteration := 0; iteration < 8; iteration++ {
+		var next [4]float32
+		for a := 0; a < n; a++ {
+			for b := 0; b < n; b++ {
+				next[a] += cov[a][b] * v[b]
+			}
+		}
+		var norm float32
+		for c := 0; c < n; c++ {
+			norm += next[c] * next[c]
+		}
+		if norm <= 0 {
+			return mean, axis
+		}
+		norm = float32(math.Sqrt(float64(norm)))
+		for c := 0; c < n; c++ {
+			v[c] = next[c] / norm
+		}
+	}
+	return mean, v
+}
+
+// axisExtremes returns the points on the principal axis that bound the
+// projections of points.
+func axisExtremes(points [][4]float32, n int) (lo, hi [4]float32) {
+	mean, axis := principalAxis(points, n)
+	minT, maxT := float32(0), float32(0)
+	for i, p := range points {
+		var t float32
+		for c := 0; c < n; c++ {
+			t += (p[c] - mean[c]) * axis[c]
+		}
+		if i == 0 || t < minT {
+			minT = t
+		}
+		if i == 0 || t > maxT {
+			maxT = t
+		}
+	}
+	for c := 0; c < n; c++ {
+		lo[c] = mean[c] + minT*axis[c]
+		hi[c] = mean[c] + maxT*axis[c]
+	}
+	return lo, hi
+}
+
+// leastSquaresEndpoints solves for the endpoints e0, e1 minimizing
+// sum((1-w)*e0 + w*e1 - x)^2 per channel, given each point's weight w on e1.
+// It returns false if the weights do not determine both endpoints.
+func leastSquaresEndpoints(points [][4]float32, weights []float32, n int) (e0, e1 [4]float32, ok bool) {
+	var aa, ab, bb float32
+	var ax, bx [4]float32
+	for i, p := range points {
+		w := weights[i]
+		a := 1 - w
+		aa += a * a
+		ab += a * w
+		bb += w * w
+		for c := 0; c < n; c++ {
+			ax[c] += a * p[c]
+			bx[c] += w * p[c]
+		}
+	}
+	det := aa*bb - ab*ab
+	if det > -1e-6 && det < 1e-6 {
+		return e0, e1, false
+	}
+	for c := 0; c < n; c++ {
+		e0[c] = (ax[c]*bb - bx[c]*ab) / det
+		e1[c] = (bx[c]*aa - ax[c]*ab) / det
+	}
+	return e0, e1, true
+}
+
+// roundClamp rounds v to the nearest integer in [0, maxValue].
+func roundClamp(v float32, maxValue int) int {
+	q := int(math.Floor(float64(v) + 0.5))
+	if q < 0 {
+		return 0
+	}
+	if q > maxValue {
+		return maxValue
+	}
+	return q
+}
+
+// quantize maps v in [0, 255] to the nearest of 0..maxValue.
+func quantize(v float32, maxValue int) int {
+	return roundClamp(v*float32(maxValue)/255.0, maxValue)
+}
+
+func absI32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func absDiffU32(a, b uint32) uint32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +313,11 @@ func expand565(c rgb565) [3]uint8 {
 	g := (uint16(c.g)*259 + 33) >> 6
 	b := (uint16(c.b)*527 + 23) >> 6
 	return [3]uint8{uint8(r), uint8(g), uint8(b)}
+}
+
+// quantize565 rounds an RGB color in [0, 255] to the nearest 565 color.
+func quantize565(c [4]float32) rgb565 {
+	return rgb565{uint8(quantize(c[0], 31)), uint8(quantize(c[1], 63)), uint8(quantize(c[2], 31))}
 }
 
 // interpolateColor4 computes the 4-color palette for bcFmt1 (c0 > c1).
@@ -184,96 +364,166 @@ func colorDistSq(a, b [3]uint8) uint32 {
 	return uint32(dr*dr + dg*dg + db*db)
 }
 
-// fitBc1Color finds the best (c0, c1) for the block and writes the color
-// indices into indices. hasTransparent indicates the block has pixels with
-// alpha < 128, which requires the 3-color + transparent layout (c0 <= c1).
-// Returns the packed color block (first 8 bytes are indices + colors).
-func fitBc1Color(block [16][4]uint8, hasTransparent bool) (colorBlock uint64, indices [16]uint8) {
-	// Gather the unique quantized colors in the block.
-	var unique []rgb565
-	var seen [65536]bool
-	var all [16]rgb565
+// bc1Fit is a candidate bcFmt1 color block and its squared error.
+type bc1Fit struct {
+	c0, c1  rgb565
+	indices [16]uint8
+	err     uint64
+}
+
+// evaluateBc1 assigns the best index to every pixel for the endpoints c0, c1.
+// The decoder uses the 4-color layout when c0 > c1 (or always for BC2/BC3
+// color blocks) and the 3-color + transparent layout otherwise. It returns
+// false if transparent pixels require the 3-color layout but c0 > c1.
+func evaluateBc1(block *[16][4]uint8, c0, c1 rgb565, hasTransparent bool) (bc1Fit, bool) {
+	p0, p1 := pack565(c0), pack565(c1)
+	if hasTransparent && p0 > p1 {
+		// Transparent mode requires c0 <= c1.
+		return bc1Fit{}, false
+	}
+	useFourColor := !hasTransparent && p0 > p1
+
+	var palette [4][3]uint8
+	if useFourColor {
+		palette = interpolateColor4(c0, c1)
+	} else {
+		palette = interpolateColor3(c0, c1)
+	}
+	maxK := 3
+	if !useFourColor {
+		// Index 3 is transparent black in the 3-color layout.
+		maxK = 2
+	}
+
+	fit := bc1Fit{c0: c0, c1: c1}
 	for i := 0; i < 16; i++ {
-		c := rgb565{block[i][0] >> 3, block[i][1] >> 2, block[i][2] >> 3}
-		all[i] = c
-		if !seen[pack565(c)] {
-			seen[pack565(c)] = true
-			unique = append(unique, c)
+		if hasTransparent && block[i][3] < 128 {
+			// Transparent pixels must use index 3.
+			fit.indices[i] = 3
+			continue
 		}
+		color := [3]uint8{block[i][0], block[i][1], block[i][2]}
+		best := 0
+		bestD := colorDistSq(palette[0], color)
+		for k := 1; k <= maxK; k++ {
+			if d := colorDistSq(palette[k], color); d < bestD {
+				bestD = d
+				best = k
+			}
+		}
+		fit.indices[i] = uint8(best)
+		fit.err += uint64(bestD)
 	}
-	if len(unique) == 0 {
-		unique = append(unique, rgb565{})
+	return fit, true
+}
+
+// consider replaces best with the evaluation of (c0, c1) if it is better.
+func (best *bc1Fit) consider(block *[16][4]uint8, c0, c1 rgb565, hasTransparent bool) {
+	if fit, ok := evaluateBc1(block, c0, c1, hasTransparent); ok && fit.err < best.err {
+		*best = fit
 	}
+}
 
-	bestError := ^uint64(0)
-	var bestIndices [16]uint8
-	var bestC0, bestC1 rgb565
-
-	for _, c0 := range unique {
-		for _, c1 := range unique {
-			p0, p1 := pack565(c0), pack565(c1)
-
-			// The decoder uses the 4-color layout when c0 > c1 (or always for
-			// BC2/BC3 color blocks) and the 3-color + transparent layout
-			// otherwise.
-			useFourColor := !hasTransparent && p0 > p1
-			if hasTransparent && p0 > p1 {
-				// Transparent mode requires c0 <= c1.
+// refineBc1 solves for the endpoints that best fit the current indices and
+// keeps them while they reduce the error.
+func refineBc1(block *[16][4]uint8, best *bc1Fit, hasTransparent bool) {
+	points := make([][4]float32, 0, 16)
+	weights := make([]float32, 0, 16)
+	for iteration := 0; iteration < 4; iteration++ {
+		fourColor := !hasTransparent && pack565(best.c0) > pack565(best.c1)
+		points, weights = points[:0], weights[:0]
+		for i := 0; i < 16; i++ {
+			var w float32
+			switch idx := best.indices[i]; {
+			case idx == 0:
+				w = 0
+			case idx == 1:
+				w = 1
+			case fourColor && idx == 2:
+				w = 1.0 / 3.0
+			case fourColor && idx == 3:
+				w = 2.0 / 3.0
+			case !fourColor && idx == 2:
+				w = 0.5
+			default:
+				// Transparent or black pixels do not constrain the endpoints.
 				continue
 			}
+			points = append(points, [4]float32{float32(block[i][0]), float32(block[i][1]), float32(block[i][2])})
+			weights = append(weights, w)
+		}
+		e0, e1, ok := leastSquaresEndpoints(points, weights, 3)
+		if !ok {
+			return
+		}
+		c0, c1 := quantize565(e0), quantize565(e1)
+		previous := best.err
+		best.consider(block, c0, c1, hasTransparent)
+		best.consider(block, c1, c0, hasTransparent)
+		if best.err >= previous {
+			return
+		}
+	}
+}
 
-			var palette [4][3]uint8
-			if useFourColor {
-				palette = interpolateColor4(c0, c1)
-			} else {
-				palette = interpolateColor3(c0, c1)
-			}
+// fitBc1Color finds the best (c0, c1) for the block. hasTransparent
+// indicates the block has pixels with alpha < 128, which requires the
+// 3-color + transparent layout (c0 <= c1). Returns the packed color block.
+func fitBc1Color(block [16][4]uint8, hasTransparent bool, quality Quality) uint64 {
+	best := bc1Fit{err: ^uint64(0)}
 
-			var err uint64
-			var idx [16]uint8
-			for i := 0; i < 16; i++ {
-				transparent := hasTransparent && block[i][3] < 128
-				if transparent {
-					// Transparent pixels must use index 3.
-					idx[i] = 3
-					continue
+	// Endpoints on the principal axis of the colors that are visible.
+	points := make([][4]float32, 0, 16)
+	for i := 0; i < 16; i++ {
+		if !hasTransparent || block[i][3] >= 128 {
+			points = append(points, [4]float32{float32(block[i][0]), float32(block[i][1]), float32(block[i][2])})
+		}
+	}
+	lo, hi := axisExtremes(points, 3)
+	c0, c1 := quantize565(hi), quantize565(lo)
+	best.consider(&block, c0, c1, hasTransparent)
+	best.consider(&block, c1, c0, hasTransparent)
+
+	if quality == QualitySlow {
+		// Every pair of the unique quantized colors in the block.
+		var unique [16]rgb565
+		n := 0
+		for i := 0; i < 16; i++ {
+			c := rgb565{block[i][0] >> 3, block[i][1] >> 2, block[i][2] >> 3}
+			duplicate := false
+			for _, u := range unique[:n] {
+				if u == c {
+					duplicate = true
+					break
 				}
-				best := 0
-				bestD := colorDistSq(palette[0], [3]uint8{block[i][0], block[i][1], block[i][2]})
-				maxK := 3
-				if !useFourColor {
-					// Index 3 is transparent black in the 3-color layout.
-					maxK = 2
-				}
-				for k := 1; k <= maxK; k++ {
-					d := colorDistSq(palette[k], [3]uint8{block[i][0], block[i][1], block[i][2]})
-					if d < bestD {
-						bestD = d
-						best = k
-					}
-				}
-				idx[i] = uint8(best)
-				err += uint64(bestD)
 			}
-			if err < bestError {
-				bestError = err
-				bestIndices = idx
-				bestC0, bestC1 = c0, c1
+			if !duplicate {
+				unique[n] = c
+				n++
 			}
 		}
+		for _, c0 := range unique[:n] {
+			for _, c1 := range unique[:n] {
+				best.consider(&block, c0, c1, hasTransparent)
+			}
+		}
+	}
+
+	if quality != QualityFast {
+		refineBc1(&block, &best, hasTransparent)
 	}
 
 	// Pack: colors first (4 bytes), then 2-bit indices (4 bytes).
 	var packed uint64
-	packed |= uint64(pack565(bestC0))
-	packed |= uint64(pack565(bestC1)) << 16
+	packed |= uint64(pack565(best.c0))
+	packed |= uint64(pack565(best.c1)) << 16
 	for i := 0; i < 16; i++ {
-		packed |= uint64(bestIndices[i]&3) << uint(32+i*2)
+		packed |= uint64(best.indices[i]&3) << uint(32+i*2)
 	}
-	return packed, bestIndices
+	return packed
 }
 
-func compressBc1Block(block [16][4]uint8) []byte {
+func compressBc1Block(block [16][4]uint8, quality Quality) [8]byte {
 	hasTransparent := false
 	for i := 0; i < 16; i++ {
 		if block[i][3] < 128 {
@@ -281,8 +531,8 @@ func compressBc1Block(block [16][4]uint8) []byte {
 			break
 		}
 	}
-	colorBlock, _ := fitBc1Color(block, hasTransparent)
-	out := make([]byte, 8)
+	colorBlock := fitBc1Color(block, hasTransparent, quality)
+	var out [8]byte
 	for i := 0; i < 8; i++ {
 		out[i] = byte(colorBlock >> uint(i*8))
 	}
@@ -293,17 +543,133 @@ func compressBc1Block(block [16][4]uint8) []byte {
 // bcFmt2
 // ---------------------------------------------------------------------------
 
-func compressBc2Block(block [16][4]uint8) []byte {
-	// Alpha: 4 bits per pixel.
+func compressBc2Block(block [16][4]uint8, quality Quality) [16]byte {
+	// Alpha: 4 bits per pixel, rounded to the nearest of the 16 levels.
 	var alpha uint64
 	for i := 0; i < 16; i++ {
-		alpha |= uint64(block[i][3]/17) << uint(i*4)
+		alpha |= uint64((uint32(block[i][3])+8)/17) << uint(i*4)
 	}
-	colorBlock, _ := fitBc1Color(block, false)
-	out := make([]byte, 16)
+	colorBlock := fitBc1Color(block, false, quality)
+	var out [16]byte
 	for i := 0; i < 8; i++ {
 		out[i] = byte(alpha >> uint(i*8))
 		out[i+8] = byte(colorBlock >> uint(i*8))
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Alpha endpoints (bcFmt3, bcFmt4, bcFmt5)
+// ---------------------------------------------------------------------------
+
+// alphaPalette computes the 8 palette entries for the endpoints a0, a1.
+type alphaPalette func(a0, a1 int32) [8]int32
+
+// alphaFit is a candidate alpha block and its squared error.
+type alphaFit struct {
+	e0, e1  int32
+	indices uint64
+	err     uint64
+}
+
+// consider replaces best with the evaluation of (a0, a1) if it is better.
+func (best *alphaFit) consider(targets *[16]int32, palette alphaPalette, a0, a1 int32) {
+	values := palette(a0, a1)
+	var err uint64
+	var indices uint64
+	for i := 0; i < 16; i++ {
+		bestK := 0
+		bestD := absI32(values[0] - targets[i])
+		for k := 1; k < 8; k++ {
+			if d := absI32(values[k] - targets[i]); d < bestD {
+				bestD = d
+				bestK = k
+			}
+		}
+		indices |= uint64(bestK) << uint(i*3)
+		err += uint64(bestD) * uint64(bestD)
+	}
+	if err < best.err {
+		*best = alphaFit{e0: a0, e1: a1, indices: indices, err: err}
+	}
+}
+
+// fitAlphaEndpoints chooses two endpoints for 16 target values in [lo, hi],
+// where lo and hi are also the fixed palette entries of the a0 <= a1 layout.
+func fitAlphaEndpoints(targets *[16]int32, lo, hi int32, palette alphaPalette, quality Quality) alphaFit {
+	best := alphaFit{err: ^uint64(0)}
+
+	minV, maxV := targets[0], targets[0]
+	for _, v := range targets[1:] {
+		minV = min(minV, v)
+		maxV = max(maxV, v)
+	}
+
+	// The value range with interpolated levels (a0 > a1), and the range of
+	// the values that are not fixed palette entries (a0 <= a1).
+	best.consider(targets, palette, maxV, minV)
+	innerMin, innerMax := hi, lo
+	for _, v := range targets {
+		if v != lo && v != hi {
+			innerMin = min(innerMin, v)
+			innerMax = max(innerMax, v)
+		}
+	}
+	if innerMin <= innerMax {
+		best.consider(targets, palette, innerMin, innerMax)
+	}
+	if quality == QualityFast {
+		return best
+	}
+
+	// Endpoints slightly inside or outside the value range can place the
+	// interpolated levels closer to the values.
+	window := int32(2)
+	if quality == QualitySlow {
+		window = 4
+	}
+	for d0 := -window; d0 <= window; d0++ {
+		for d1 := -window; d1 <= window; d1++ {
+			a0 := min(max(maxV+d0, lo), hi)
+			a1 := min(max(minV+d1, lo), hi)
+			best.consider(targets, palette, a0, a1)
+			best.consider(targets, palette, a1, a0)
+		}
+	}
+
+	if quality == QualitySlow {
+		// Every pair of the distinct values.
+		var unique [16]int32
+		n := 0
+		for _, v := range targets {
+			duplicate := false
+			for _, u := range unique[:n] {
+				if u == v {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				unique[n] = v
+				n++
+			}
+		}
+		for _, a0 := range unique[:n] {
+			for _, a1 := range unique[:n] {
+				best.consider(targets, palette, a0, a1)
+			}
+		}
+	}
+	return best
+}
+
+// packAlphaBlock stores the endpoints and 3-bit indices of an alpha block.
+func packAlphaBlock(fit alphaFit) [8]byte {
+	var out [8]byte
+	out[0] = byte(fit.e0)
+	out[1] = byte(fit.e1)
+	for i := 0; i < 6; i++ {
+		out[2+i] = byte(fit.indices >> uint(i*8))
 	}
 	return out
 }
@@ -340,72 +706,38 @@ func interpolateAlpha4(a0, a1 uint32) [8]uint32 {
 	return alpha
 }
 
-func compressSmoothAlpha(alphas [16]uint8) [8]byte {
-	// Collect the distinct alpha values as endpoint candidates.
-	var unique []uint32
-	var seen [256]bool
-	for i := 0; i < 16; i++ {
-		if !seen[alphas[i]] {
-			seen[alphas[i]] = true
-			unique = append(unique, uint32(alphas[i]))
-		}
+// smoothAlphaPalette uses the 6-level layout for a0 > a1 and the 4-level
+// layout with fixed 0/255 entries for a0 <= a1.
+func smoothAlphaPalette(a0, a1 int32) [8]int32 {
+	var levels [8]uint32
+	if a0 > a1 {
+		levels = interpolateAlpha6(uint32(a0), uint32(a1))
+	} else {
+		levels = interpolateAlpha4(uint32(a0), uint32(a1))
 	}
-
-	bestError := uint64(0xFFFFFFFFFFFFFFFF)
-	var bestE0, bestE1 uint32
-	var bestIndices uint64
-
-	// Search endpoint pairs (a0 > a1 uses the 6-level layout; a0 <= a1 uses
-	// the 4-level layout with fixed 0/255 entries).
-	for _, a0 := range unique {
-		for _, a1 := range unique {
-			var palette [8]uint32
-			if a0 > a1 {
-				palette = interpolateAlpha6(a0, a1)
-			} else {
-				palette = interpolateAlpha4(a0, a1)
-			}
-
-			var err uint64
-			var indices uint64
-			for i := 0; i < 16; i++ {
-				best := 0
-				bestD := absDiffU32(palette[0], uint32(alphas[i]))
-				for k := 1; k < 8; k++ {
-					d := absDiffU32(palette[k], uint32(alphas[i]))
-					if d < bestD {
-						bestD = d
-						best = k
-					}
-				}
-				indices |= uint64(best) << uint(i*3)
-				err += uint64(bestD)
-			}
-			if err < bestError {
-				bestError = err
-				bestE0, bestE1 = a0, a1
-				bestIndices = indices
-			}
-		}
+	var palette [8]int32
+	for i, v := range levels {
+		palette[i] = int32(v)
 	}
-
-	var out [8]byte
-	out[0] = byte(bestE0)
-	out[1] = byte(bestE1)
-	for i := 0; i < 6; i++ {
-		out[2+i] = byte(bestIndices >> uint(i*8))
-	}
-	return out
+	return palette
 }
 
-func compressBc3Block(block [16][4]uint8) []byte {
+func compressSmoothAlpha(alphas [16]uint8, quality Quality) [8]byte {
+	var targets [16]int32
+	for i, a := range alphas {
+		targets[i] = int32(a)
+	}
+	return packAlphaBlock(fitAlphaEndpoints(&targets, 0, 255, smoothAlphaPalette, quality))
+}
+
+func compressBc3Block(block [16][4]uint8, quality Quality) [16]byte {
 	var alphas [16]uint8
 	for i := 0; i < 16; i++ {
 		alphas[i] = block[i][3]
 	}
-	alphaBlock := compressSmoothAlpha(alphas)
-	colorBlock, _ := fitBc1Color(block, false)
-	out := make([]byte, 16)
+	alphaBlock := compressSmoothAlpha(alphas, quality)
+	colorBlock := fitBc1Color(block, false, quality)
+	var out [16]byte
 	for i := 0; i < 8; i++ {
 		out[i] = alphaBlock[i]
 		out[i+8] = byte(colorBlock >> uint(i*8))
@@ -451,13 +783,14 @@ func interpolateBc4(a0, a1 int32, isSigned bool) [8]int32 {
 	return alpha
 }
 
+func bc4UnsignedPalette(a0, a1 int32) [8]int32 { return interpolateBc4(a0, a1, false) }
+
+func bc4SignedPalette(a0, a1 int32) [8]int32 { return interpolateBc4(a0, a1, true) }
+
 // compressBc4Block encodes one channel of 16 values. For signed blocks the
 // values are the bit patterns of snorm8 values (int8), as stored in the block.
-func compressBc4Block(values [16]uint8, isSigned bool) []byte {
-	// Collect the distinct values as endpoint candidates.
+func compressBc4Block(values [16]uint8, isSigned bool, quality Quality) [8]byte {
 	var targets [16]int32
-	var unique []int32
-	var seen [256]bool
 	for i := 0; i < 16; i++ {
 		v := int32(values[i])
 		if isSigned {
@@ -468,65 +801,19 @@ func compressBc4Block(values [16]uint8, isSigned bool) []byte {
 			}
 		}
 		targets[i] = v
-		if !seen[uint8(v)] {
-			seen[uint8(v)] = true
-			unique = append(unique, v)
-		}
 	}
-
-	bestError := uint64(0xFFFFFFFFFFFFFFFF)
-	var bestE0, bestE1 int32
-	var bestIndices uint64
-
-	for _, a0 := range unique {
-		for _, a1 := range unique {
-			palette := interpolateBc4(a0, a1, isSigned)
-
-			var err uint64
-			var indices uint64
-			for i := 0; i < 16; i++ {
-				best := 0
-				bestD := absI32(palette[0] - targets[i])
-				for k := 1; k < 8; k++ {
-					d := absI32(palette[k] - targets[i])
-					if d < bestD {
-						bestD = d
-						best = k
-					}
-				}
-				indices |= uint64(best) << uint(i*3)
-				err += uint64(bestD)
-			}
-			if err < bestError {
-				bestError = err
-				bestE0, bestE1 = a0, a1
-				bestIndices = indices
-			}
-		}
+	if isSigned {
+		return packAlphaBlock(fitAlphaEndpoints(&targets, -127, 127, bc4SignedPalette, quality))
 	}
-
-	var out [8]byte
-	out[0] = byte(bestE0)
-	out[1] = byte(bestE1)
-	for i := 0; i < 6; i++ {
-		out[2+i] = byte(bestIndices >> uint(i*8))
-	}
-	return out[:]
+	return packAlphaBlock(fitAlphaEndpoints(&targets, 0, 255, bc4UnsignedPalette, quality))
 }
 
-func absI32(v int32) int32 {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
-func compressBc5Block(r, g [16]uint8, isSigned bool) []byte {
-	rBlock := compressBc4Block(r, isSigned)
-	gBlock := compressBc4Block(g, isSigned)
-	out := make([]byte, 16)
-	copy(out[:8], rBlock)
-	copy(out[8:], gBlock)
+func compressBc5Block(r, g [16]uint8, isSigned bool, quality Quality) [16]byte {
+	rBlock := compressBc4Block(r, isSigned, quality)
+	gBlock := compressBc4Block(g, isSigned, quality)
+	var out [16]byte
+	copy(out[:8], rBlock[:])
+	copy(out[8:], gBlock[:])
 	return out
 }
 
@@ -534,9 +821,58 @@ func compressBc5Block(r, g [16]uint8, isSigned bool) []byte {
 // BC6H
 // ---------------------------------------------------------------------------
 
+// bc6Weight4 is the 4-bit index weight table.
+var bc6Weight4 = [16]int32{0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64}
+
+// bc6Fit is a candidate BC6H mode 11 block and its squared error.
+type bc6Fit struct {
+	e0, e1  [3]uint16
+	indices uint64
+	err     float64
+}
+
+// consider replaces best with the evaluation of (e0, e1) if it is better.
+//
+// The decoder interpolates the unquantized endpoint values (e*64+32) and
+// scales by 31/64, giving half bits h = interp*31 + 15. Compare in float
+// space.
+func (best *bc6Fit) consider(targets *[16][3]float32, e0, e1 [3]uint16) {
+	var palette [16][3]float32
+	for k := 0; k < 16; k++ {
+		for c := 0; c < 3; c++ {
+			interp := interpolateI32(int32(e0[c]), int32(e1[c]), bc6Weight4[k])
+			h := (interp*1984 + 992) >> 6 // finish_unquantize unsigned
+			palette[k][c] = halfToFloat32(uint16(h))
+		}
+	}
+
+	var err float64
+	var indices uint64
+	for i := 0; i < 16; i++ {
+		bestK := 0
+		bestErr := float64(0xFFFFFFFFFFFFFFFF)
+		for k := 0; k < 16; k++ {
+			var e float64
+			for c := 0; c < 3; c++ {
+				d := float64(palette[k][c] - targets[i][c])
+				e += d * d
+			}
+			if e < bestErr {
+				bestErr = e
+				bestK = k
+			}
+		}
+		indices |= uint64(bestK) << uint(i*4)
+		err += bestErr
+	}
+	if err < best.err {
+		*best = bc6Fit{e0: e0, e1: e1, indices: indices, err: err}
+	}
+}
+
 // compressBc6Block encodes a block using BC6H mode 11 (0b00011):
 // no partition, both endpoints stored explicitly with 10 bits each.
-func compressBc6Block(block [16][4]uint16) []byte {
+func compressBc6Block(block [16][4]uint16, quality Quality) [16]byte {
 	// For unsigned mode, clamp negative halves (sign bit set) to zero.
 	var minV [3]uint16
 	var maxV [3]uint16
@@ -544,9 +880,11 @@ func compressBc6Block(block [16][4]uint16) []byte {
 		minV[c] = 0xFFFF
 		maxV[c] = 0
 	}
+	var targets [16][3]float32
 	for i := 0; i < 16; i++ {
 		for c := 0; c < 3; c++ {
 			v := block[i][c] & 0x7FFF
+			targets[i][c] = halfToFloat32(v)
 			if v < minV[c] {
 				minV[c] = v
 			}
@@ -557,108 +895,129 @@ func compressBc6Block(block [16][4]uint16) []byte {
 	}
 
 	// Decoded half bits for a 10-bit endpoint e are approximately e*31.
-	// Invert: e = round(h / 31).
-	// Try all 8 per-channel endpoint orientations (min/max assignment).
-	var weights = [16]int32{0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64}
-
-	bestError := float64(0xFFFFFFFFFFFFFFFF)
-	var bestE0, bestE1 [3]uint16
-	var bestIndices uint64
-
-	for orientation := 0; orientation < 8; orientation++ {
-		var e0, e1 [3]uint16
+	// Invert: e = round(h / 31). Each channel maps its min to either
+	// endpoint; the orientation selects which.
+	endpoints := func(orientation int) (e0, e1 [3]uint16) {
 		for c := 0; c < 3; c++ {
-			flipped := (orientation>>c)&1 == 1
-			if flipped {
-				e0[c] = clampU16(uint16((uint32(maxV[c])+15)/31), 1023)
-				e1[c] = clampU16(uint16((uint32(minV[c])+15)/31), 1023)
+			lo := clampU16(uint16((uint32(minV[c])+15)/31), 1023)
+			hi := clampU16(uint16((uint32(maxV[c])+15)/31), 1023)
+			if (orientation>>c)&1 == 1 {
+				e0[c], e1[c] = hi, lo
 			} else {
-				e0[c] = clampU16(uint16((uint32(minV[c])+15)/31), 1023)
-				e1[c] = clampU16(uint16((uint32(maxV[c])+15)/31), 1023)
+				e0[c], e1[c] = lo, hi
 			}
 		}
+		return e0, e1
+	}
 
-		// Assign indices: 4-bit weights, palette via bcdec interpolation.
-		// The decoder interpolates the unquantized endpoint values
-		// (e*64+32) and scales by 31/64, giving half bits
-		// h = interp*31 + 15. Compare in float space.
-		var err float64
-		var indices uint64
-		for i := 0; i < 16; i++ {
-			best := 0
-			bestErr := float64(0xFFFFFFFFFFFFFFFF)
-			for k := 0; k < 16; k++ {
-				var e float64
-				for c := 0; c < 3; c++ {
-					interp := interpolateI32(int32(e0[c]), int32(e1[c]), weights[k])
-					h := (interp*1984 + 992) >> 6 // finish_unquantize unsigned
-					decoded := halfToFloat32(uint16(h))
-					target := halfToFloat32(block[i][c] & 0x7FFF)
-					d := float64(decoded - target)
-					e += d * d
-				}
-				if e < bestErr {
-					bestErr = e
-					best = k
+	best := bc6Fit{err: math.Inf(1)}
+	if quality == QualityFast {
+		// Flip the channels that decrease along the principal axis.
+		points := make([][4]float32, 16)
+		for i := range points {
+			points[i] = [4]float32{targets[i][0], targets[i][1], targets[i][2]}
+		}
+		_, axis := principalAxis(points, 3)
+		orientation := 0
+		for c := 0; c < 3; c++ {
+			if axis[c] < 0 {
+				orientation |= 1 << c
+			}
+		}
+		e0, e1 := endpoints(orientation)
+		best.consider(&targets, e0, e1)
+	} else {
+		for orientation := 0; orientation < 8; orientation++ {
+			e0, e1 := endpoints(orientation)
+			best.consider(&targets, e0, e1)
+		}
+	}
+
+	if quality == QualitySlow {
+		// Coordinate descent on the 6 endpoint components.
+		for _, step := range []int32{16, 4, 1} {
+			for improved := true; improved; {
+				improved = false
+				for endpoint := 0; endpoint < 2; endpoint++ {
+					for c := 0; c < 3; c++ {
+						for _, delta := range []int32{-step, step} {
+							e0, e1 := best.e0, best.e1
+							e := &e0
+							if endpoint == 1 {
+								e = &e1
+							}
+							v := int32(e[c]) + delta
+							if v < 0 || v > 1023 {
+								continue
+							}
+							e[c] = uint16(v)
+							previous := best.err
+							best.consider(&targets, e0, e1)
+							if best.err < previous {
+								improved = true
+							}
+						}
+					}
 				}
 			}
-			indices |= uint64(best) << uint(i*4)
-			err += bestErr
-		}
-		if err < bestError {
-			bestError = err
-			bestE0, bestE1 = e0, e1
-			bestIndices = indices
 		}
 	}
 
 	// The fix-up index is stored without its most significant bit, so it
 	// must be below 8. Swapping the endpoints and inverting the indices
 	// produces the same palette with the fix-up index in range.
-	if bestIndices&0xF >= 8 {
-		bestE0, bestE1 = bestE1, bestE0
-		bestIndices = ^bestIndices
+	if best.indices&0xF >= 8 {
+		best.e0, best.e1 = best.e1, best.e0
+		best.indices = ^best.indices
 	}
 
 	// Assemble the bitstream LSB-first.
 	// Mode 11: 0b00011 LSB-first: 1, 1, 0, 0, 0; endpoints; then indices
 	// (first pixel uses 3 bits as the fix-up, the rest 4 bits).
-	return assembleBc6Mode11(bestE0, bestE1, bestIndices)
+	return assembleBc6Mode11(best.e0, best.e1, best.indices)
 }
 
-// assembleBc6Mode11 builds the 128-bit mode 11 block.
-func assembleBc6Mode11(e0, e1 [3]uint16, indices uint64) []byte {
-	var words [16]byte
-	// bit writer over the 16 bytes, LSB-first
-	bitPos := uint(0)
-	write := func(value uint64, count uint) {
-		for i := uint(0); i < count; i++ {
-			bit := (value >> i) & 1
-			if bit == 1 {
-				words[bitPos/8] |= 1 << (bitPos % 8)
-			}
-			bitPos++
+// bitWriter writes bits LSB-first into a 128-bit block.
+type bitWriter struct {
+	words  [16]byte
+	bitPos uint
+}
+
+func (w *bitWriter) write(value uint64, count uint) {
+	for i := uint(0); i < count; i++ {
+		if (value>>i)&1 == 1 {
+			w.words[w.bitPos/8] |= 1 << (w.bitPos % 8)
 		}
+		w.bitPos++
 	}
-	// Mode 11: 0b00011 LSB-first: bits 0,1 = 1,1; bits 2-4 = 0,0,0
-	write(0b11, 2)
-	write(0, 3)
-	for c := 0; c < 3; c++ {
-		write(uint64(e0[c]), 10)
-	}
-	for c := 0; c < 3; c++ {
-		write(uint64(e1[c]), 10)
-	}
-	// Indices: the fix-up pixel (0) uses 3 bits, the rest use 4 bits.
-	// The fix-up's 4th bit is dropped, so write the stream per pixel.
+}
+
+// writeIndices writes 4-bit indices where the fix-up pixel (0) uses 3 bits.
+// The fix-up's 4th bit is dropped, so write the stream per pixel.
+func (w *bitWriter) writeIndices(indices uint64) {
 	for i := 0; i < 16; i++ {
 		count := uint(4)
 		if i == 0 {
 			count = 3
 		}
-		write((indices>>uint(i*4))&((1<<count)-1), count)
+		w.write((indices>>uint(i*4))&((1<<count)-1), count)
 	}
-	return words[:]
+}
+
+// assembleBc6Mode11 builds the 128-bit mode 11 block.
+func assembleBc6Mode11(e0, e1 [3]uint16, indices uint64) [16]byte {
+	var w bitWriter
+	// Mode 11: 0b00011 LSB-first: bits 0,1 = 1,1; bits 2-4 = 0,0,0
+	w.write(0b11, 2)
+	w.write(0, 3)
+	for c := 0; c < 3; c++ {
+		w.write(uint64(e0[c]), 10)
+	}
+	for c := 0; c < 3; c++ {
+		w.write(uint64(e1[c]), 10)
+	}
+	w.writeIndices(indices)
+	return w.words
 }
 
 func clampU16(v uint16, max uint16) uint16 {
@@ -675,17 +1034,125 @@ func clampU16(v uint16, max uint16) uint16 {
 // bc7Weight4 is the 4-bit index weight table.
 var bc7Weight4 = [16]uint32{0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64}
 
+// bc7Fit is a candidate BC7 mode 6 block and its squared error.
+type bc7Fit struct {
+	e0, e1  [4]uint8
+	p0, p1  uint8
+	indices uint64
+	err     uint64
+}
+
+// consider replaces best with the evaluation of the 7-bit endpoints e0, e1
+// and p-bits p0, p1 if it is better.
+func (best *bc7Fit) consider(block *[16][4]uint8, e0, e1 [4]uint8, p0, p1 uint8) {
+	// Decoded endpoint values (8-bit) and the interpolated palette.
+	var palette [16][4]uint32
+	for c := 0; c < 4; c++ {
+		d0 := uint32(e0[c])<<1 | uint32(p0)
+		d1 := uint32(e1[c])<<1 | uint32(p1)
+		for k := 0; k < 16; k++ {
+			w := bc7Weight4[k]
+			palette[k][c] = (d0*(64-w) + d1*w + 32) >> 6
+		}
+	}
+
+	// Assign 4-bit indices and accumulate the error.
+	var err uint64
+	var indices uint64
+	for i := 0; i < 16; i++ {
+		bestK := 0
+		bestErr := uint64(0xFFFFFFFFFFFFFFFF)
+		for k := 0; k < 16; k++ {
+			var e uint64
+			for c := 0; c < 4; c++ {
+				d := uint64(absDiffU32(palette[k][c], uint32(block[i][c])))
+				e += d * d
+			}
+			if e < bestErr {
+				bestErr = e
+				bestK = k
+			}
+		}
+		indices |= uint64(bestK) << uint(i*4)
+		err += bestErr
+	}
+	if err < best.err {
+		*best = bc7Fit{e0: e0, e1: e1, p0: p0, p1: p1, indices: indices, err: err}
+	}
+}
+
+// quantizeBc7Endpoint returns the 7-bit components and p-bit that decode
+// closest to the 8-bit endpoint d for the given p-bit. A component decodes
+// as (e<<1)|p.
+func quantizeBc7Endpoint(d [4]float32, p uint8) (e [4]uint8, err float32) {
+	for c := 0; c < 4; c++ {
+		e[c] = uint8(roundClamp((d[c]-float32(p))/2, 127))
+		diff := float32(uint32(e[c])<<1|uint32(p)) - d[c]
+		err += diff * diff
+	}
+	return e, err
+}
+
+// considerDecoded quantizes the decoded 8-bit endpoints d0, d1 and considers
+// the result. With allPBits, every p-bit combination is considered;
+// otherwise each endpoint uses the p-bit that quantizes it best.
+func (best *bc7Fit) considerDecoded(block *[16][4]uint8, d0, d1 [4]float32, allPBits bool) {
+	if allPBits {
+		for p0 := uint8(0); p0 < 2; p0++ {
+			for p1 := uint8(0); p1 < 2; p1++ {
+				e0, _ := quantizeBc7Endpoint(d0, p0)
+				e1, _ := quantizeBc7Endpoint(d1, p1)
+				best.consider(block, e0, e1, p0, p1)
+			}
+		}
+		return
+	}
+	pick := func(d [4]float32) ([4]uint8, uint8) {
+		e0, err0 := quantizeBc7Endpoint(d, 0)
+		e1, err1 := quantizeBc7Endpoint(d, 1)
+		if err1 < err0 {
+			return e1, 1
+		}
+		return e0, 0
+	}
+	e0, p0 := pick(d0)
+	e1, p1 := pick(d1)
+	best.consider(block, e0, e1, p0, p1)
+}
+
+// refine solves for the endpoints that best fit the current indices and
+// keeps them while they reduce the error.
+func (best *bc7Fit) refine(block *[16][4]uint8, points [][4]float32, allPBits bool) {
+	weights := make([]float32, 16)
+	for iteration := 0; iteration < 4; iteration++ {
+		for i := range weights {
+			weights[i] = float32(bc7Weight4[(best.indices>>uint(i*4))&0xF]) / 64.0
+		}
+		d0, d1, ok := leastSquaresEndpoints(points, weights, 4)
+		if !ok {
+			return
+		}
+		previous := best.err
+		best.considerDecoded(block, d0, d1, allPBits)
+		if best.err >= previous {
+			return
+		}
+	}
+}
+
 // compressBc7Block encodes a block using BC7 mode 6:
 // 1 subset, 7-bit RGBA endpoints with unique p-bits, 4-bit indices.
-func compressBc7Block(block [16][4]uint8) []byte {
+func compressBc7Block(block [16][4]uint8, quality Quality) [16]byte {
 	// Per-channel min/max of the block.
 	var minV, maxV [4]uint8
 	for c := 0; c < 4; c++ {
 		minV[c] = 255
 		maxV[c] = 0
 	}
+	points := make([][4]float32, 16)
 	for i := 0; i < 16; i++ {
 		for c := 0; c < 4; c++ {
+			points[i][c] = float32(block[i][c])
 			if block[i][c] < minV[c] {
 				minV[c] = block[i][c]
 			}
@@ -696,13 +1163,9 @@ func compressBc7Block(block [16][4]uint8) []byte {
 	}
 
 	// Endpoints are per-channel independent, so each channel can map its
-	// min to either endpoint. Try all 16 orientation combinations.
-	bestError := uint64(0xFFFFFFFFFFFFFFFF)
-	var bestE0, bestE1 [4]uint8
-	var bestP0, bestP1 uint8
-	var bestIndices uint64
-
-	for orientation := 0; orientation < 16; orientation++ {
+	// min to either endpoint. The orientation selects which.
+	best := bc7Fit{err: ^uint64(0)}
+	tryOrientation := func(fit *bc7Fit, orientation int) {
 		var e0, e1 [4]uint8
 		var t0, t1 [4]uint8
 		for c := 0; c < 4; c++ {
@@ -722,88 +1185,61 @@ func compressBc7Block(block [16][4]uint8) []byte {
 		// Endpoint components are 7 bits + 1 shared p-bit per endpoint,
 		// decoded as (e7<<1)|p. Choose the p-bit that best fits the channel
 		// values the endpoint was derived from.
-		p0 := bestPBit(e0, t0)
-		p1 := bestPBit(e1, t1)
+		fit.consider(&block, e0, e1, bestPBit(e0, t0), bestPBit(e1, t1))
+	}
 
-		// Decoded endpoint values (8-bit).
-		var d0, d1 [4]uint32
-		for c := 0; c < 4; c++ {
-			d0[c] = uint32(e0[c])<<1 | uint32(p0)
-			d1[c] = uint32(e1[c])<<1 | uint32(p1)
+	// Flip the channels that decrease along the principal axis.
+	_, axis := principalAxis(points, 4)
+	orientation := 0
+	for c := 0; c < 4; c++ {
+		if axis[c] < 0 {
+			orientation |= 1 << c
 		}
+	}
+	tryOrientation(&best, orientation)
+	if quality != QualityFast {
+		best.refine(&block, points, false)
+	}
 
-		// Assign 4-bit indices and accumulate the error.
-		var err uint64
-		var indices uint64
-		for i := 0; i < 16; i++ {
-			best := 0
-			bestErr := uint64(0xFFFFFFFFFFFFFFFF)
-			for k := 0; k < 16; k++ {
-				w := bc7Weight4[k]
-				var e uint64
-				for c := 0; c < 4; c++ {
-					decoded := (d0[c]*(64-w) + d1[c]*w + 32) >> 6
-					e += uint64(absDiffU32(decoded, uint32(block[i][c])))
-				}
-				if e < bestErr {
-					bestErr = e
-					best = k
-				}
-			}
-			indices |= uint64(best) << uint(i*4)
-			err += bestErr
+	if quality == QualitySlow {
+		// Refine the best of all orientations as well, keeping the better
+		// of the two results.
+		exhaustive := bc7Fit{err: ^uint64(0)}
+		for orientation := 0; orientation < 16; orientation++ {
+			tryOrientation(&exhaustive, orientation)
 		}
-		if err < bestError {
-			bestError = err
-			bestE0, bestE1 = e0, e1
-			bestP0, bestP1 = p0, p1
-			bestIndices = indices
+		exhaustive.refine(&block, points, true)
+		best.refine(&block, points, true)
+		if exhaustive.err < best.err {
+			best = exhaustive
 		}
 	}
 
 	// The fix-up index is stored without its most significant bit, so it
 	// must be below 8. The weights are symmetric (w[15-k] = 64 - w[k]), so
 	// swapping the endpoints and inverting the indices decodes identically.
-	if bestIndices&0xF >= 8 {
-		bestE0, bestE1 = bestE1, bestE0
-		bestP0, bestP1 = bestP1, bestP0
-		bestIndices = ^bestIndices
+	if best.indices&0xF >= 8 {
+		best.e0, best.e1 = best.e1, best.e0
+		best.p0, best.p1 = best.p1, best.p0
+		best.indices = ^best.indices
 	}
 
 	// Assemble the bitstream LSB-first.
-	var words [16]byte
-	bitPos := uint(0)
-	write := func(value uint64, count uint) {
-		for i := uint(0); i < count; i++ {
-			if ((value >> i) & 1) == 1 {
-				words[bitPos/8] |= 1 << (bitPos % 8)
-			}
-			bitPos++
-		}
-	}
+	var w bitWriter
 	// Mode 6: six zeros then a 1.
-	write(0, 6)
-	write(1, 1)
+	w.write(0, 6)
+	w.write(1, 1)
 	// Endpoints are stored channel-major (matching the decoder):
 	// R0, R1, G0, G1, B0, B1, A0, A1.
 	for c := 0; c < 4; c++ {
-		write(uint64(bestE0[c]), 7)
-		write(uint64(bestE1[c]), 7)
+		w.write(uint64(best.e0[c]), 7)
+		w.write(uint64(best.e1[c]), 7)
 	}
 	// P-bits.
-	write(uint64(bestP0), 1)
-	write(uint64(bestP1), 1)
-	// Indices: the fix-up pixel (0) uses 3 bits, the rest use 4 bits.
-	// The fix-up's 4th bit is dropped, so write the stream per pixel.
-	for i := 0; i < 16; i++ {
-		count := uint(4)
-		if i == 0 {
-			count = 3
-		}
-		write((bestIndices>>uint(i*4))&((1<<count)-1), count)
-	}
-
-	return words[:]
+	w.write(uint64(best.p0), 1)
+	w.write(uint64(best.p1), 1)
+	w.writeIndices(best.indices)
+	return w.words
 }
 
 // bestPBit picks the p-bit that minimizes the total error of the quantized
@@ -822,11 +1258,4 @@ func bestPBit(e, target [4]uint8) uint8 {
 		return 1
 	}
 	return 0
-}
-
-func absDiffU32(a, b uint32) uint32 {
-	if a > b {
-		return a - b
-	}
-	return b - a
 }

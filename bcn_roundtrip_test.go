@@ -30,26 +30,32 @@ func TestBcEncodeDecodeSolid(t *testing.T) {
 			var compressed []byte
 			switch c.bc {
 			case bcFmt1:
-				compressed = compressBc1Block(block)
+				c := compressBc1Block(block, QualityNormal)
+				compressed = c[:]
 			case bcFmt2:
-				compressed = compressBc2Block(block)
+				c := compressBc2Block(block, QualityNormal)
+				compressed = c[:]
 			case bcFmt3:
-				compressed = compressBc3Block(block)
+				c := compressBc3Block(block, QualityNormal)
+				compressed = c[:]
 			case bcFmt4:
 				var values [16]uint8
 				for i := 0; i < 16; i++ {
 					values[i] = block[i][0]
 				}
-				compressed = compressBc4Block(values, false)
+				c := compressBc4Block(values, false, QualityNormal)
+				compressed = c[:]
 			case bcFmt5:
 				var r, g [16]uint8
 				for i := 0; i < 16; i++ {
 					r[i] = block[i][0]
 					g[i] = block[i][1]
 				}
-				compressed = compressBc5Block(r, g, false)
+				c := compressBc5Block(r, g, false, QualityNormal)
+				compressed = c[:]
 			case bcFmt7:
-				compressed = compressBc7Block(block)
+				c := compressBc7Block(block, QualityNormal)
+				compressed = c[:]
 			}
 			decoded := decompressBlock(c.bc, compressed)
 			for y := 0; y < 4; y++ {
@@ -101,11 +107,8 @@ func TestBc6hEncodeDecode(t *testing.T) {
 			for i := 0; i < 16; i++ {
 				block[i] = [4]uint16{h, h, h, 0x3C00}
 			}
-			compressed := compressBc6Block(block)
-			if len(compressed) != 16 {
-				t.Fatalf("compressed length %d", len(compressed))
-			}
-			decoded := decompressBlockF32(bcFmt6, compressed)
+			compressed := compressBc6Block(block, QualityNormal)
+			decoded := decompressBlockF32(bcFmt6, compressed[:])
 			for y := 0; y < 4; y++ {
 				for x := 0; x < 4; x++ {
 					p := decoded[y][x]
@@ -134,8 +137,8 @@ func TestBc7EncodeDecodeGradient(t *testing.T) {
 		v := uint8(i * 16)
 		block[i] = [4]uint8{v, uint8(255 - v), v / 2, 255}
 	}
-	compressed := compressBc7Block(block)
-	decoded := decompressBlock(bcFmt7, compressed)
+	compressed := compressBc7Block(block, QualityNormal)
+	decoded := decompressBlock(bcFmt7, compressed[:])
 	for i := 0; i < 16; i++ {
 		p := decoded[i/4][i%4]
 		for ch := 0; ch < 3; ch++ {
@@ -161,8 +164,8 @@ func TestBc1TransparentMode(t *testing.T) {
 			block[i] = [4]uint8{10, 10, 10, 0}
 		}
 	}
-	compressed := compressBc1Block(block)
-	decoded := decompressBlock(bcFmt1, compressed)
+	compressed := compressBc1Block(block, QualityNormal)
+	decoded := decompressBlock(bcFmt1, compressed[:])
 	for i := 0; i < 16; i++ {
 		p := decoded[i/4][i%4]
 		if i%2 == 0 {
@@ -183,8 +186,8 @@ func TestBc3Alpha(t *testing.T) {
 	for i := 0; i < 16; i++ {
 		block[i] = [4]uint8{0, 0, 0, uint8(i * 16)}
 	}
-	compressed := compressBc3Block(block)
-	decoded := decompressBlock(bcFmt3, compressed)
+	compressed := compressBc3Block(block, QualityNormal)
+	decoded := decompressBlock(bcFmt3, compressed[:])
 	for i := 0; i < 16; i++ {
 		p := decoded[i/4][i%4]
 		d := int(p[3]) - int(block[i][3])
@@ -336,7 +339,8 @@ func TestFixUpIndexMostSignificantBit(t *testing.T) {
 
 		var compressed []byte
 		if bc == bcFmt7 {
-			compressed = compressBc7Block(block)
+			c := compressBc7Block(block, QualityNormal)
+			compressed = c[:]
 		} else {
 			var half [16][4]uint16
 			for i := range block {
@@ -344,7 +348,8 @@ func TestFixUpIndexMostSignificantBit(t *testing.T) {
 					half[i][c] = float32ToHalf(float32(block[i][c]) / 255.0)
 				}
 			}
-			compressed = compressBc6Block(half)
+			c := compressBc6Block(half, QualityNormal)
+			compressed = c[:]
 		}
 		decoded := decompressBlock(bc, compressed)
 		for c := 0; c < 3; c++ {

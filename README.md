@@ -21,11 +21,14 @@ dependencies (Go standard library only).
   uncompressed formats to RGBA8 or RGBAF32 surfaces with self-contained Go
   block decoding.
 - Encode RGBA8/RGBAF32 surfaces to BC1–BC7 and all uncompressed formats with
-  self-contained Go encoders:
-  - BC1/BC2/BC3: exhaustive endpoint search over the block's colors.
-  - BC4/BC5: min/max endpoint fit.
+  self-contained Go encoders that compress block rows in parallel:
+  - BC1/BC2/BC3: principal axis endpoints with least squares refinement.
+  - BC4/BC5: value range endpoints with a local search (unorm and snorm).
   - BC6H: mode 11 (explicit 10.10.10 endpoints, no delta compression).
   - BC7: mode 6 (7-bit RGBA endpoints with p-bits, 4-bit indices).
+- `Quality` trades speed for quality: `QualityFast` uses the block's
+  principal axis or value range, `QualityNormal` adds endpoint refinement,
+  and `QualitySlow` adds exhaustive searches.
 - Mipmap generation (box-filtered downsampling).
 - Random-access mip reads and bounded-memory preview decoding without loading
   the complete DDS payload or full-resolution RGBA image.
