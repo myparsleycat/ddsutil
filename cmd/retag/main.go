@@ -150,7 +150,8 @@ func setPitchOrLinearSize(dds *ddsutil.Dds, format ddsutil.DxgiFormat) {
 // writeFileAtomic writes dds to a temporary file next to path and renames it
 // over path, so a failed write never leaves a truncated file behind. If path
 // is a symbolic link, the file it points to is replaced. Permission bits are
-// kept; the owner becomes the user running retag.
+// kept, and so are the owner and group where the platform and the user's
+// privileges allow (see copyOwner).
 func writeFileAtomic(path string, dds *ddsutil.Dds) error {
 	if target, err := filepath.EvalSymlinks(path); err == nil {
 		path = target
@@ -165,6 +166,7 @@ func writeFileAtomic(path string, dds *ddsutil.Dds) error {
 			temp.Close()
 			return err
 		}
+		copyOwner(temp, info)
 	}
 	if err := dds.Write(temp); err != nil {
 		temp.Close()

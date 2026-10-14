@@ -86,7 +86,8 @@ The API now follows Go naming conventions. Update callers as follows:
   input by default.
 - `retag` accepts any DXGI format name, converts legacy headers to DX10,
   rejects formats with a different data size unless `-force` is given, and
-  writes atomically, optionally to `-o`.
+  writes atomically, optionally to `-o`, through symbolic links and keeping
+  the file's permissions and, where allowed, its owner and group.
 
 ### Performance
 
