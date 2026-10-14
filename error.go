@@ -23,6 +23,8 @@ var (
 	ErrUnsupportedFormat = errors.New("Format is not supported well enough for this operation")
 	// ErrOutOfBounds is returned when a request is out of bounds.
 	ErrOutOfBounds = errors.New("request is out of bounds")
+	// ErrTooLarge is returned when a texture size computation overflows.
+	ErrTooLarge = errors.New("texture size overflows the supported range")
 )
 
 // GeneralError returns a generic error carrying the given message.

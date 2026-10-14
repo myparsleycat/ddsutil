@@ -101,20 +101,9 @@ func (f D3DFormat) String() string {
 
 // GetPitch implements DataFormat. See https://msdn.microsoft.com/en-us/library/bb943991.aspx
 func (f D3DFormat) GetPitch(width uint32) (uint32, bool) {
-	if f == D3DFormatR8G8_B8G8 || f == D3DFormatG8R8_G8B8 {
-		return ((width + 1) >> 1) * 4, true
-	}
-	if bpp, ok := f.GetBitsPerPixel(); ok {
-		return (width*uint32(bpp) + 7) / 8, true
-	}
-	if bs, ok := f.GetBlockSize(); ok {
-		w := (width + 3) / 4
-		if w < 1 {
-			w = 1
-		}
-		return w * bs, true
-	}
-	return 0, false
+	bpp, hasBPP := f.GetBitsPerPixel()
+	blockSize, hasBlockSize := f.GetBlockSize()
+	return defaultPitch(width, f == D3DFormatR8G8_B8G8 || f == D3DFormatG8R8_G8B8, bpp, hasBPP, blockSize, hasBlockSize)
 }
 
 // GetPitchHeight implements DataFormat.

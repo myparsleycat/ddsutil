@@ -66,9 +66,15 @@ func NewD3D(params NewD3dParams) (*Dds, error) {
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
-	arrayStride := getArrayStride(size, minMipmapSize, mml)
+	arrayStride, ok := getArrayStride(size, minMipmapSize, mml)
+	if !ok {
+		return nil, ErrTooLarge
+	}
 
-	dataSize := arrayStride
+	dataSize, err := uint64ToInt(arrayStride)
+	if err != nil {
+		return nil, err
+	}
 
 	header, err := NewHeaderD3D(
 		params.Height,
@@ -107,9 +113,18 @@ func NewDXGI(params NewDxgiParams) (*Dds, error) {
 	if !ok {
 		return nil, ErrUnsupportedFormat
 	}
-	arrayStride := getArrayStride(size, minMipmapSize, mml)
-
-	dataSize := arraysize * arrayStride
+	arrayStride, ok := getArrayStride(size, minMipmapSize, mml)
+	if !ok {
+		return nil, ErrTooLarge
+	}
+	totalSize, ok := checkedMul(uint64(arraysize), arrayStride)
+	if !ok {
+		return nil, ErrTooLarge
+	}
+	dataSize, err := uint64ToInt(totalSize)
+	if err != nil {
+		return nil, err
+	}
 
 	if params.IsCubemap {
 		arraysize /= 6
@@ -273,7 +288,9 @@ func (d *Dds) GetPitchHeight() uint32 {
 	return 1
 }
 
-func (d *Dds) GetMainTextureSize() (uint32, bool) {
+// GetMainTextureSize returns the size in bytes of the base mip level of one
+// array layer, or false if it cannot be determined.
+func (d *Dds) GetMainTextureSize() (uint64, bool) {
 	var pitchPtr *uint32
 	if pitch, ok := d.GetPitch(); ok {
 		pitchPtr = &pitch
@@ -287,14 +304,20 @@ func (d *Dds) GetMainTextureSize() (uint32, bool) {
 	)
 }
 
-func (d *Dds) GetArrayStride() (uint32, error) {
+// GetArrayStride returns the size in bytes of one array layer including all
+// of its mip levels.
+func (d *Dds) GetArrayStride() (uint64, error) {
 	size, ok := d.GetMainTextureSize()
 	if !ok {
 		return 0, ErrUnsupportedFormat
 	}
 	mml := d.GetNumMipmapLevels()
 	minMipmapSize := d.GetMinMipmapSizeInBytes()
-	return getArrayStride(size, minMipmapSize, mml), nil
+	stride, ok := getArrayStride(size, minMipmapSize, mml)
+	if !ok {
+		return 0, ErrTooLarge
+	}
+	return stride, nil
 }
 
 func (d *Dds) GetNumArrayLayers() uint32 {
@@ -334,14 +357,14 @@ func (d *Dds) GetData(arrayLayer uint32) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	end := uint64(offset) + uint64(size)
-	if end > uint64(len(d.Data)) {
+	end, ok := checkedAdd(offset, size)
+	if !ok || end > uint64(len(d.Data)) {
 		return nil, ErrOutOfBounds
 	}
-	return d.Data[offset : offset+size], nil
+	return d.Data[offset:end], nil
 }
 
-func (d *Dds) getOffsetAndSize(arrayLayer uint32) (uint32, uint32, error) {
+func (d *Dds) getOffsetAndSize(arrayLayer uint32) (uint64, uint64, error) {
 	// Verify request bounds
 	if arrayLayer >= d.GetNumArrayLayers() {
 		return 0, 0, ErrOutOfBounds
@@ -350,34 +373,61 @@ func (d *Dds) getOffsetAndSize(arrayLayer uint32) (uint32, uint32, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	offset := arrayLayer * arrayStride
+	offset, ok := checkedMul(uint64(arrayLayer), arrayStride)
+	if !ok {
+		return 0, 0, ErrTooLarge
+	}
 	return offset, arrayStride, nil
 }
 
-func getTextureSize(pitch, linearSize *uint32, pitchHeight, height uint32, depth *uint32) (uint32, bool) {
+func getTextureSize(pitch, linearSize *uint32, pitchHeight, height uint32, depth *uint32) (uint64, bool) {
 	d := u32Val(depth, 1)
 
 	if linearSize != nil {
-		return *linearSize, true
+		return uint64(*linearSize), true
 	}
 	if pitch != nil {
-		rowHeight := (height + (pitchHeight - 1)) / pitchHeight
-		return *pitch * rowHeight * d, true
+		rowHeight := (uint64(height) + uint64(pitchHeight) - 1) / uint64(pitchHeight)
+		size, ok := checkedMul(uint64(*pitch), rowHeight)
+		if !ok {
+			return 0, false
+		}
+		size, ok = checkedMul(size, uint64(d))
+		if !ok {
+			return 0, false
+		}
+		return size, true
 	}
 	return 0, false
 }
 
-func getArrayStride(textureSize, minMipmapSize, mipmapLevels uint32) uint32 {
-	var stride uint32
+// getArrayStride sums the sizes of mipmapLevels mip levels, each a quarter of
+// the previous one but at least minMipmapSize. It returns false on overflow.
+//
+// The mip level count comes from the file header, so the sum is computed in
+// constant time once the mip size reaches its minimum.
+func getArrayStride(textureSize uint64, minMipmapSize, mipmapLevels uint32) (uint64, bool) {
+	var stride uint64
 	currentMipsize := textureSize
 	for i := uint32(0); i < mipmapLevels; i++ {
-		stride += currentMipsize
+		if currentMipsize == uint64(minMipmapSize) {
+			// Every remaining level has the minimum size.
+			rest, ok := checkedMul(uint64(mipmapLevels-i), currentMipsize)
+			if !ok {
+				return 0, false
+			}
+			return checkedAdd(stride, rest)
+		}
+		var ok bool
+		if stride, ok = checkedAdd(stride, currentMipsize); !ok {
+			return 0, false
+		}
 		currentMipsize /= 4
-		if currentMipsize < minMipmapSize {
-			currentMipsize = minMipmapSize
+		if currentMipsize < uint64(minMipmapSize) {
+			currentMipsize = uint64(minMipmapSize)
 		}
 	}
-	return stride
+	return stride, true
 }
 
 func (d *Dds) String() string {

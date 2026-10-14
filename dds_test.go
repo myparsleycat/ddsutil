@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"os"
 	"testing"
 )
 
@@ -402,5 +403,86 @@ func TestStringDebugOutput(t *testing.T) {
 	s := dds.String()
 	if !bytes.Contains([]byte(s), []byte("A8R8G8B8")) {
 		t.Errorf("debug output missing format name: %q", s)
+	}
+}
+
+// naiveArrayStride is the straightforward per-level sum.
+func naiveArrayStride(textureSize uint64, minMipmapSize, mipmapLevels uint32) uint64 {
+	var stride uint64
+	current := textureSize
+	for i := uint32(0); i < mipmapLevels; i++ {
+		stride += current
+		current /= 4
+		if current < uint64(minMipmapSize) {
+			current = uint64(minMipmapSize)
+		}
+	}
+	return stride
+}
+
+func TestGetArrayStrideMatchesNaiveSum(t *testing.T) {
+	for _, size := range []uint64{0, 1, 3, 8, 16, 100, 4096, 1 << 30, 1 << 40} {
+		for _, minSize := range []uint32{0, 1, 4, 8, 16, 32} {
+			for levels := uint32(0); levels < 40; levels++ {
+				got, ok := getArrayStride(size, minSize, levels)
+				want := naiveArrayStride(size, minSize, levels)
+				if !ok || got != want {
+					t.Fatalf("getArrayStride(%d, %d, %d) = %d, %v; want %d", size, minSize, levels, got, ok, want)
+				}
+			}
+		}
+	}
+}
+
+// TestHugeMipmapCount checks that a header claiming 2^32-1 mip levels is
+// handled in constant time and reported as out of bounds.
+func TestHugeMipmapCount(t *testing.T) {
+	data, err := os.ReadFile("testdata/bc1.dds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append([]byte(nil), data...)
+	flags := binary.LittleEndian.Uint32(data[8:])
+	binary.LittleEndian.PutUint32(data[8:], flags|uint32(HeaderFlagsMIPMAPCOUNT))
+	binary.LittleEndian.PutUint32(data[28:], 0xFFFFFFFF)
+	dds, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stride, err := dds.GetArrayStride()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := naiveArrayStride(32, 8, 3) + uint64(0xFFFFFFFF-3)*8; stride != want {
+		t.Fatalf("stride = %d, want %d", stride, want)
+	}
+	if _, err := dds.GetData(0); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("GetData error = %v, want ErrOutOfBounds", err)
+	}
+}
+
+func TestSizeOverflow(t *testing.T) {
+	// 65536 x 65536 RGBA32F is 64 GiB per layer: the stride needs 64 bits.
+	mips := uint32(17)
+	header, err := NewHeaderDXGI(65536, 65536, nil, DxgiFormatR32G32B32A32_Float, &mips, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dds := &Dds{Header: header}
+	stride, err := dds.GetArrayStride()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := naiveArrayStride(65536*65536*16, 16, 17); stride != want {
+		t.Fatalf("stride = %d, want %d", stride, want)
+	}
+
+	// The linear size of a compressed header is a 32-bit field.
+	if _, err := NewHeaderDXGI(1<<20, 1<<20, nil, DxgiFormatBC7_UNorm, nil, nil, nil); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("NewHeaderDXGI error = %v, want ErrTooLarge", err)
+	}
+	// The pitch of a 2^32-1 pixel wide RGBA32F row does not fit in 32 bits.
+	if _, ok := DxgiFormatR32G32B32A32_Float.GetPitch(0xFFFFFFFF); ok {
+		t.Fatal("GetPitch should report overflow")
 	}
 }

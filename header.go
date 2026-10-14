@@ -254,7 +254,11 @@ func NewHeaderD3D(
 		header.Flags.Insert(HeaderFlagsLINEARSIZE)
 		pitchHeight := format.GetPitchHeight()
 		rawHeight := (height + (pitchHeight - 1)) / pitchHeight
-		header.LinearSize = u32p(pitch * rawHeight * d)
+		linearSize, ok := mulU32(pitch, rawHeight, d)
+		if !ok {
+			return header, ErrTooLarge
+		}
+		header.LinearSize = u32p(linearSize)
 	} else {
 		header.Flags.Insert(HeaderFlagsPITCH)
 		header.Pitch = u32p(pitch)
@@ -309,7 +313,11 @@ func NewHeaderDXGI(
 		header.Flags.Insert(HeaderFlagsLINEARSIZE)
 		pitchHeight := format.GetPitchHeight()
 		rawHeight := (height + (pitchHeight - 1)) / pitchHeight
-		header.LinearSize = u32p(pitch * rawHeight * d)
+		linearSize, ok := mulU32(pitch, rawHeight, d)
+		if !ok {
+			return header, ErrTooLarge
+		}
+		header.LinearSize = u32p(linearSize)
 	} else {
 		header.Flags.Insert(HeaderFlagsPITCH)
 		header.Pitch = u32p(pitch)

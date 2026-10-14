@@ -56,3 +56,28 @@ func defaultMinimumMipmapSizeInBytes(bpp uint8, hasBPP bool, blockSize uint32, h
 	}
 	return 0, false
 }
+
+// defaultPitch is the shared implementation of GetPitch. It returns false if
+// the format has no pitch or the pitch does not fit in 32 bits.
+func defaultPitch(width uint32, packedPair bool, bpp uint8, hasBPP bool, blockSize uint32, hasBlockSize bool) (uint32, bool) {
+	var pitch uint64
+	switch {
+	case packedPair:
+		// Two pixels share 4 bytes (R8G8_B8G8 and G8R8_G8B8).
+		pitch = ((uint64(width) + 1) >> 1) * 4
+	case hasBPP:
+		pitch = (uint64(width)*uint64(bpp) + 7) / 8
+	case hasBlockSize:
+		blocks := (uint64(width) + 3) / 4
+		if blocks < 1 {
+			blocks = 1
+		}
+		pitch = blocks * uint64(blockSize)
+	default:
+		return 0, false
+	}
+	if pitch > uint64(^uint32(0)) {
+		return 0, false
+	}
+	return uint32(pitch), true
+}

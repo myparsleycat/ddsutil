@@ -277,20 +277,9 @@ func DxgiFormatFromU32(v uint32) (DxgiFormat, bool) {
 // GetPitch implements DataFormat. See
 // https://msdn.microsoft.com/en-us/library/bb943991.aspx
 func (f DxgiFormat) GetPitch(width uint32) (uint32, bool) {
-	if f == DxgiFormatR8G8_B8G8_UNorm || f == DxgiFormatG8R8_G8B8_UNorm {
-		return ((width + 1) >> 1) * 4, true
-	}
-	if bpp, ok := f.GetBitsPerPixel(); ok {
-		return (width*uint32(bpp) + 7) / 8, true
-	}
-	if bs, ok := f.GetBlockSize(); ok {
-		w := (width + 3) / 4
-		if w < 1 {
-			w = 1
-		}
-		return w * bs, true
-	}
-	return 0, false
+	bpp, hasBPP := f.GetBitsPerPixel()
+	blockSize, hasBlockSize := f.GetBlockSize()
+	return defaultPitch(width, f == DxgiFormatR8G8_B8G8_UNorm || f == DxgiFormatG8R8_G8B8_UNorm, bpp, hasBPP, blockSize, hasBlockSize)
 }
 
 // GetPitchHeight implements DataFormat.

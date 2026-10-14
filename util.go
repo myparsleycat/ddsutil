@@ -43,6 +43,19 @@ func u32Val(p *uint32, fallback uint32) uint32 {
 	return fallback
 }
 
+// mulU32 multiplies the factors and reports whether the product fits in a
+// uint32.
+func mulU32(factors ...uint32) (uint32, bool) {
+	product := uint64(1)
+	for _, f := range factors {
+		product *= uint64(f)
+		if product > uint64(^uint32(0)) {
+			return 0, false
+		}
+	}
+	return uint32(product), true
+}
+
 // flagName pairs a bit with its display name for formatFlags.
 type flagName[T ~uint32] struct {
 	bit  T
