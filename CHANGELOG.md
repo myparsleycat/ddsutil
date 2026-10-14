@@ -45,6 +45,8 @@ The API now follows Go naming conventions. Update callers as follows:
   `GeneralError` so they can be tested with `errors.Is`.
 - `CreateImageError` unwraps to its `SurfaceError`.
 - `Mipmaps` implements `fmt.Stringer`.
+- `NRGBAFromDds`, which returns an `image.NRGBA` matching the straight alpha
+  stored in DDS files.
 
 ### Fixed
 
@@ -56,6 +58,9 @@ The API now follows Go naming conventions. Update callers as follows:
   decoded that pixel with the wrong color.
 - `Surface.ToDds` wrote cube maps with a DX10 array size of 0, which is
   invalid and rejected by `NewDdsReader`.
+- `SurfaceRgba8FromImage` and its variants ignored `Stride` and `Rect.Min`,
+  producing garbled surfaces for sub-images. `IntoImage` now shares the
+  surface data without copying, as documented.
 - A header declaring 2^32-1 mipmaps made `LayerData` loop for seconds, and
   size computations wrapped around for textures over 4 GiB.
 
