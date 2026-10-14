@@ -1,6 +1,7 @@
 package ddsutil
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 )
@@ -45,14 +46,14 @@ func putLE(b []byte, off int, v uint32) { binary.LittleEndian.PutUint32(b[off:],
 // compressed block data and decodes mip level 0 to RGBA8.
 func decodeBlockDds(t *testing.T, format DxgiFormat, block []byte) []uint8 {
 	t.Helper()
-	d, err := NewDXGI(NewDxgiParams{
+	d, err := NewDxgi(DxgiParams{
 		Height:            4,
 		Width:             4,
 		Format:            format,
 		ResourceDimension: D3D10ResourceDimensionTexture2D,
 	})
 	if err != nil {
-		t.Fatalf("NewDXGI: %v", err)
+		t.Fatalf("NewDxgi: %v", err)
 	}
 	d.Data = block
 	img, err := ImageFromDds(d, 0)
@@ -231,7 +232,7 @@ func TestDdsFormatDetection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: parse: %v", c.name, err)
 		}
-		format, err := DDSImageFormat(dds)
+		format, err := dds.ImageFormat()
 		if err != nil {
 			t.Fatalf("%s: format: %v", c.name, err)
 		}
@@ -292,6 +293,23 @@ func TestSurfaceDdsRoundTripCube(t *testing.T) {
 		if parsed.Layers != 6 {
 			t.Errorf("%v: cube round trip layers = %d", format, parsed.Layers)
 		}
+		if dds.Header10 != nil && dds.Header10.ArraySize != 1 {
+			t.Errorf("%v: DX10 array size = %d, want 1 cube", format, dds.Header10.ArraySize)
+		}
+		if len(dds.Data) != len(data) {
+			t.Errorf("%v: data length = %d, want %d", format, len(dds.Data), len(data))
+		}
+		serialized, err := dds.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := NewDdsReader(bytes.NewReader(serialized), int64(len(serialized)))
+		if err != nil {
+			t.Fatalf("NewDdsReader %v: %v", format, err)
+		}
+		if layers := reader.Metadata().Layers; layers != 6 {
+			t.Errorf("%v: reader layers = %d, want 6", format, layers)
+		}
 	}
 }
 
@@ -344,7 +362,7 @@ func TestDdsBytesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.GetWidth() != 8 || parsed.GetHeight() != 16 || parsed.GetNumMipmapLevels() != 4 {
+	if parsed.Width() != 8 || parsed.Height() != 16 || parsed.NumMipmapLevels() != 4 {
 		t.Fatalf("round trip mismatch: %+v", parsed.Header)
 	}
 	if len(parsed.Data) != len(dds.Data) {

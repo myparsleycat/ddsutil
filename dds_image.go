@@ -3,11 +3,16 @@ package ddsutil
 import (
 	"errors"
 	"image"
-	"image/color"
 )
 
 // ImageFromDds decodes the given mip level from the DDS to an RGBA image.
 // Array layers are arranged vertically from top to bottom.
+//
+// The pixels hold the alpha as stored in the DDS, which is usually straight
+// (non-premultiplied), whereas image.RGBA is defined as alpha-premultiplied;
+// only files whose AlphaMode is AlphaModePreMultiplied match it. Use
+// NRGBAFromDds when the image has alpha and will be composited or encoded,
+// e.g. as PNG.
 func ImageFromDds(dds *Dds, mipmap uint32) (*image.RGBA, error) {
 	layers := arrayLayerCount(dds)
 	surface, err := DecodeLayersMipmapsDds(dds, 0, layers, mipmap, mipmap+1)
@@ -19,6 +24,36 @@ func ImageFromDds(dds *Dds, mipmap uint32) (*image.RGBA, error) {
 		return nil, &CreateImageError{Kind: CreateImageErrorDecompressSurface, SurfaceErr: surfaceErr}
 	}
 	return surface.IntoImage()
+}
+
+// NRGBAFromDds decodes the given mip level from the DDS to an NRGBA image
+// with straight alpha. Pixels of files whose AlphaMode is
+// AlphaModePreMultiplied are converted with UnpremultiplyRgba8. Array layers
+// are arranged vertically from top to bottom.
+func NRGBAFromDds(dds *Dds, mipmap uint32) (*image.NRGBA, error) {
+	img, err := ImageFromDds(dds, mipmap)
+	if err != nil {
+		return nil, err
+	}
+	if dds.AlphaMode() == AlphaModePreMultiplied {
+		UnpremultiplyRgba8(img.Pix)
+	}
+	return &image.NRGBA{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, nil
+}
+
+// UnpremultiplyRgba8 converts RGBA8 pixels from premultiplied to straight
+// alpha in place. Color channels larger than alpha, which premultiplied data
+// cannot hold, become 255, and fully transparent pixels are left unchanged.
+func UnpremultiplyRgba8(pixels []byte) {
+	for i := 0; i+3 < len(pixels); i += 4 {
+		a := uint32(pixels[i+3])
+		if a == 0 || a == 255 {
+			continue
+		}
+		for c := i; c < i+3; c++ {
+			pixels[c] = uint8(min((uint32(pixels[c])*255+a/2)/a, 255))
+		}
+	}
 }
 
 // DdsFromImage encodes image to a 2D DDS file with the given format.
@@ -33,19 +68,15 @@ func DdsFromImage(img *image.RGBA, format ImageFormat, quality Quality, mipmaps 
 	return encoded.ToDds()
 }
 
-// SurfaceRgba8FromImage creates a 2D view over the data in img without any copies.
+// SurfaceRgba8FromImage creates a 2D surface from the pixels of img. It is a
+// view without copies when the rows of img are contiguous, as for images
+// created with image.NewRGBA, and a copy otherwise (e.g. for sub-images).
 func SurfaceRgba8FromImage(img *image.RGBA) *SurfaceRgba8 {
-	return &SurfaceRgba8{
-		Width:   uint32(img.Rect.Dx()),
-		Height:  uint32(img.Rect.Dy()),
-		Depth:   1,
-		Layers:  1,
-		Mipmaps: 1,
-		Data:    img.Pix,
-	}
+	return SurfaceRgba8FromImageLayers(img, 1)
 }
 
-// SurfaceRgba8FromImageLayers creates a 2D view with layers over the data in img.
+// SurfaceRgba8FromImageLayers creates a 2D surface with layers from the
+// pixels of img, without copies when possible (see SurfaceRgba8FromImage).
 //
 // Array layers should be stacked vertically in img with an overall height height*layers.
 func SurfaceRgba8FromImageLayers(img *image.RGBA, layers uint32) *SurfaceRgba8 {
@@ -55,11 +86,12 @@ func SurfaceRgba8FromImageLayers(img *image.RGBA, layers uint32) *SurfaceRgba8 {
 		Depth:   1,
 		Layers:  layers,
 		Mipmaps: 1,
-		Data:    img.Pix,
+		Data:    contiguousPix(img),
 	}
 }
 
-// SurfaceRgba8FromImageDepth creates a 3D view over the data in img.
+// SurfaceRgba8FromImageDepth creates a 3D surface from the pixels of img,
+// without copies when possible (see SurfaceRgba8FromImage).
 //
 // Depth slices should be stacked vertically in img with an overall height height*depth.
 func SurfaceRgba8FromImageDepth(img *image.RGBA, depth uint32) *SurfaceRgba8 {
@@ -69,8 +101,36 @@ func SurfaceRgba8FromImageDepth(img *image.RGBA, depth uint32) *SurfaceRgba8 {
 		Depth:   depth,
 		Layers:  1,
 		Mipmaps: 1,
-		Data:    img.Pix,
+		Data:    contiguousPix(img),
 	}
+}
+
+// contiguousPix returns the pixels of img as tightly packed rows, copying
+// only if the rows are not contiguous in img.Pix. If img.Pix is too short for
+// img.Rect, the rows that exist are returned and validation reports the
+// missing data.
+func contiguousPix(img *image.RGBA) []uint8 {
+	width, height := img.Rect.Dx(), img.Rect.Dy()
+	rowLength := width * 4
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	start := img.PixOffset(img.Rect.Min.X, img.Rect.Min.Y)
+	if start < 0 || start > len(img.Pix) {
+		return nil
+	}
+	if img.Stride == rowLength {
+		return img.Pix[start:min(start+rowLength*height, len(img.Pix))]
+	}
+	pix := make([]uint8, rowLength*height)
+	for y := 0; y < height; y++ {
+		rowStart := start + y*img.Stride
+		if rowStart < 0 || rowStart+rowLength > len(img.Pix) {
+			return pix[:y*rowLength]
+		}
+		copy(pix[y*rowLength:], img.Pix[rowStart:rowStart+rowLength])
+	}
+	return pix
 }
 
 // ToImage creates an image for all layers and depth slices for the given mipmap.
@@ -81,7 +141,7 @@ func (s *SurfaceRgba8) ToImage(mipmap uint32) (*image.RGBA, error) {
 	// A single 2D image can only represent data from a single mip level across layers.
 	var imageData []uint8
 	for layer := uint32(0); layer < s.Layers; layer++ {
-		for level := uint32(0); level < s.Depth; level++ {
+		for level := uint32(0); level < MipDimension(s.Depth, mipmap); level++ {
 			data := s.Get(layer, level, mipmap)
 			imageData = append(imageData, data...)
 		}
@@ -101,7 +161,8 @@ func (s *SurfaceRgba8) ToImage(mipmap uint32) (*image.RGBA, error) {
 	return img, nil
 }
 
-// IntoImage creates an image for all layers and depth slices without copying.
+// IntoImage creates an image for all layers and depth slices that shares the
+// surface's data without copying.
 //
 // Fails if the surface has more than one mipmap.
 // Array layers and depth slices are arranged vertically from top to bottom.
@@ -116,17 +177,15 @@ func (s *SurfaceRgba8) IntoImage() (*image.RGBA, error) {
 	}
 
 	dataLength := len(s.Data)
-	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
-	if len(img.Pix) != dataLength {
+	if uint64(width)*uint64(height)*4 != uint64(dataLength) {
 		return nil, &CreateImageError{Kind: CreateImageErrorInvalidSurfaceDimensions, Width: width, Height: height, DataLength: dataLength}
 	}
-	copy(img.Pix, s.Data)
-	return img, nil
+	return &image.RGBA{Pix: s.Data, Stride: int(width) * 4, Rect: image.Rect(0, 0, int(width), int(height))}, nil
 }
 
-// GetImage returns the image corresponding to the specified layer, depth
+// Image returns the image corresponding to the specified layer, depth
 // level, and mipmap, or nil if the range is not fully contained.
-func (s *SurfaceRgba8) GetImage(layer, depthLevel, mipmap uint32) *image.RGBA {
+func (s *SurfaceRgba8) Image(layer, depthLevel, mipmap uint32) *image.RGBA {
 	data := s.Get(layer, depthLevel, mipmap)
 	if data == nil {
 		return nil
@@ -141,23 +200,14 @@ func (s *SurfaceRgba8) GetImage(layer, depthLevel, mipmap uint32) *image.RGBA {
 	return img
 }
 
-// ToNRGBA converts the surface to an NRGBA image (values are stored
-// straight, not alpha-premultiplied).
+// ToNRGBA creates an NRGBA image for all layers and depth slices for the
+// given mipmap, arranged like ToImage. Surfaces store straight
+// (non-premultiplied) alpha, which matches image.NRGBA; prefer it over
+// image.RGBA when compositing or encoding images with alpha.
 func (s *SurfaceRgba8) ToNRGBA(mipmap uint32) (*image.NRGBA, error) {
 	img, err := s.ToImage(mipmap)
 	if err != nil {
 		return nil, err
 	}
-	nrgba := image.NewNRGBA(img.Rect)
-	for i := 0; i < len(img.Pix); i += 4 {
-		r, g, b, a := img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3]
-		// Go's image.RGBA interprets the color as alpha-premultiplied when
-		// converted via color.RGBA, so convert to straight alpha for NRGBA.
-		_ = color.RGBA{r, g, b, a}
-		nrgba.Pix[i] = r
-		nrgba.Pix[i+1] = g
-		nrgba.Pix[i+2] = b
-		nrgba.Pix[i+3] = a
-	}
-	return nrgba, nil
+	return &image.NRGBA{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, nil
 }

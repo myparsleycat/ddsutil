@@ -21,11 +21,14 @@ dependencies (Go standard library only).
   uncompressed formats to RGBA8 or RGBAF32 surfaces with self-contained Go
   block decoding.
 - Encode RGBA8/RGBAF32 surfaces to BC1–BC7 and all uncompressed formats with
-  self-contained Go encoders:
-  - BC1/BC2/BC3: exhaustive endpoint search over the block's colors.
-  - BC4/BC5: min/max endpoint fit.
+  self-contained Go encoders that compress block rows in parallel:
+  - BC1/BC2/BC3: principal axis endpoints with least squares refinement.
+  - BC4/BC5: value range endpoints with a local search (unorm and snorm).
   - BC6H: mode 11 (explicit 10.10.10 endpoints, no delta compression).
   - BC7: mode 6 (7-bit RGBA endpoints with p-bits, 4-bit indices).
+- `Quality` trades speed for quality: `QualityFast` uses the block's
+  principal axis or value range, `QualityNormal` adds endpoint refinement,
+  and `QualitySlow` adds exhaustive searches.
 - Mipmap generation (box-filtered downsampling).
 - Random-access mip reads and bounded-memory preview decoding without loading
   the complete DDS payload or full-resolution RGBA image.
@@ -46,8 +49,8 @@ dds2, err := ddsutil.DdsFromImage(img, ddsutil.BC7RgbaUnorm,
     ddsutil.QualityNormal, ddsutil.MipmapsGeneratedAutomatic)
 
 // Work with the raw file container.
-fmt.Println(dds.GetWidth(), dds.GetHeight())
-data0, _ := dds.GetData(0) // mip chain of array layer 0
+fmt.Println(dds.Width(), dds.Height())
+data0, _ := dds.LayerData(0) // mip chain of array layer 0
 ```
 
 For large textures, use `DdsReader` to read or decode only the mip needed by
@@ -75,10 +78,16 @@ and `ddsutil.Read`/`Dds.Write` for stream-based file I/O.
 ## Command-line tools
 
 ```sh
-go run ./cmd/ddsinfo texture.dds        # dump header information
-go run ./cmd/dds2png texture.dds out.png
-go run ./cmd/retag texture.dds BC7_UNorm_sRGB   # re-tag DX10 format, no data conversion
+go run ./cmd/ddsinfo texture.dds...               # dump header information
+go run ./cmd/dds2png texture.dds [out.png]        # decode to PNG
+go run ./cmd/dds2png -layer 2 -mip 1 cube.dds     # pick a layer, mip or -slice
+go run ./cmd/retag texture.dds BC7_UNorm_sRGB     # re-tag the DXGI format, no data conversion
 ```
+
+`retag` accepts any DXGI format name (e.g. `BC7_UNorm_sRGB` or
+`DXGI_FORMAT_BC7_UNORM_SRGB`), adds a DX10 header to legacy files, refuses
+formats with a different data size unless `-force` is given, and writes the
+result atomically (to `-o` or over the input).
 
 ## Known quirks
 
@@ -91,10 +100,13 @@ layers / 6).
 
 ```sh
 go test ./...
+go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s .   # also FuzzDdsReader, FuzzEncodeDecode
+go test -run '^$' -bench . .                             # encode/decode benchmarks
 ```
 
 `golden_test.go` compares container output byte-for-byte against the golden
-reference files in `testdata/`.
+reference files in `testdata/`. CI runs gofmt, `go vet`, the race-enabled
+tests on the minimum and latest Go versions, and each fuzz target.
 
 ## License
 

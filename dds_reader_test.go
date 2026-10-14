@@ -31,7 +31,7 @@ func TestDdsReaderReadsOnlySelectedMip(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := reader.Metadata()
-	if metadata.Width != 64 || metadata.Height != 32 || metadata.Depth != 1 || metadata.Layers != 1 || metadata.Mipmaps != encoded.GetNumMipmapLevels() || metadata.ImageFormat != BC7RgbaUnormSrgb {
+	if metadata.Width != 64 || metadata.Height != 32 || metadata.Depth != 1 || metadata.Layers != 1 || metadata.Mipmaps != encoded.NumMipmapLevels() || metadata.ImageFormat != BC7RgbaUnormSrgb {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	tracked.ranges = nil
@@ -54,9 +54,99 @@ func TestDdsReaderReadsOnlySelectedMip(t *testing.T) {
 	}
 }
 
+func TestDdsReaderAlphaMode(t *testing.T) {
+	for _, tc := range []struct {
+		fourCC FourCC
+		want   AlphaMode
+	}{
+		{FourCC(FourCCDXT2), AlphaModePreMultiplied},
+		{FourCC(FourCCDXT3), AlphaModeUnknown},
+		{FourCC(FourCCDXT4), AlphaModePreMultiplied},
+		{FourCC(FourCCDXT5), AlphaModeUnknown},
+	} {
+		dds, err := NewD3D(D3DParams{Width: 4, Height: 4, Format: D3DFormatDXT3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fourCC := tc.fourCC
+		dds.Header.SPF.FourCC = &fourCC
+		raw := ddsBytes(t, dds)
+		reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := reader.Metadata().AlphaMode; got != tc.want {
+			t.Errorf("%v: alpha mode = %v, want %v", tc.fourCC, got, tc.want)
+		}
+	}
+
+	dds, err := NewDxgi(DxgiParams{Width: 4, Height: 4, Format: DxgiFormatR8G8B8A8_UNorm, AlphaMode: AlphaModePreMultiplied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := ddsBytes(t, dds)
+	reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.Metadata().AlphaMode; got != AlphaModePreMultiplied {
+		t.Errorf("DX10: alpha mode = %v, want %v", got, AlphaModePreMultiplied)
+	}
+}
+
+func TestDdsReaderReadsLegacyBc4Bc5FourCC(t *testing.T) {
+	for _, tc := range []struct {
+		fourCC   FourCC
+		format   ImageFormat
+		template D3DFormat
+	}{
+		{FourCCBC4_UNORM, BC4RUnorm, D3DFormatDXT1},
+		{FourCCBC4_SNORM, BC4RSnorm, D3DFormatDXT1},
+		{fourccBC5U, BC5RgUnorm, D3DFormatDXT5},
+		{FourCCBC5_SNORM, BC5RgSnorm, D3DFormatDXT5},
+	} {
+		encoded, err := readerFixtureSurface(8, 8, 1, 1).Encode(tc.format, QualityFast, MipmapsDisabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A legacy header with the same block size, retagged with the
+		// FourCC, which has no DataFormat.
+		dds, err := NewD3D(D3DParams{Width: 8, Height: 8, Format: tc.template})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fourCC := tc.fourCC
+		dds.Header.SPF.FourCC = &fourCC
+		dds.Data = encoded.Data
+		if dds.Format() != nil {
+			t.Fatalf("%v: Format = %v, want nil", tc.fourCC, dds.Format())
+		}
+		want, err := DecodeLayersMipmapsDds(dds, 0, 1, 0, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		raw := ddsBytes(t, dds)
+		reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
+		if err != nil {
+			t.Fatalf("%v: %v", tc.fourCC, err)
+		}
+		if got := reader.Metadata().ImageFormat; got != tc.format {
+			t.Fatalf("%v: image format = %v, want %v", tc.fourCC, got, tc.format)
+		}
+		got, err := reader.DecodeMipRgba8(0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Fatalf("%v: decoded data differs from DecodeLayersMipmapsDds", tc.fourCC)
+		}
+	}
+}
+
 func TestDdsReaderReadsClassicDdsMip(t *testing.T) {
 	mipmaps := uint32(2)
-	dds, err := NewD3D(NewD3dParams{Width: 8, Height: 8, Format: D3DFormatDXT1, MipmapLevels: &mipmaps})
+	dds, err := NewD3D(D3DParams{Width: 8, Height: 8, Format: D3DFormatDXT1, MipmapLevels: mipmaps})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +233,7 @@ func TestDdsReaderDecodeMipToMatchesNearest(t *testing.T) {
 }
 
 func TestDdsReaderSelectsArrayLayer(t *testing.T) {
-	encoded := encodeReaderFixture(t, 8, 8, 2, BC7RgbaUnorm, GeneratedExact(2))
+	encoded := encodeReaderFixture(t, 8, 8, 2, BC7RgbaUnorm, MipmapsGeneratedExact(2))
 	raw := ddsBytes(t, encoded)
 	reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
@@ -168,18 +258,18 @@ func TestDdsReaderSelectsArrayLayer(t *testing.T) {
 func TestDdsReaderSelectsCubemapFace(t *testing.T) {
 	const width, height, layers = uint32(8), uint32(8), uint32(6)
 	input := readerFixtureSurface(width, height, 1, layers)
-	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, GeneratedExact(2))
+	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, MipmapsGeneratedExact(2))
 	if err != nil {
 		t.Fatal(err)
 	}
 	mipmaps := encoded.Mipmaps
 	arrayLayers := layers
-	dds, err := NewDXGI(NewDxgiParams{
+	dds, err := NewDxgi(DxgiParams{
 		Height:            height,
 		Width:             width,
 		Format:            DxgiFormatBC7_UNorm,
-		MipmapLevels:      &mipmaps,
-		ArrayLayers:       &arrayLayers,
+		MipmapLevels:      mipmaps,
+		ArrayLayers:       arrayLayers,
 		IsCubemap:         true,
 		ResourceDimension: D3D10ResourceDimensionTexture2D,
 		AlphaMode:         AlphaModeStraight,
@@ -208,7 +298,7 @@ func TestDdsReaderSelectsCubemapFace(t *testing.T) {
 func TestDdsReaderReadsVolumeMip(t *testing.T) {
 	const width, height, depth = uint32(8), uint32(8), uint32(4)
 	input := readerFixtureSurface(width, height, depth, 1)
-	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, GeneratedExact(2))
+	encoded, err := input.Encode(BC7RgbaUnorm, QualityFast, MipmapsGeneratedExact(2))
 	if err != nil {
 		t.Fatal(err)
 	}

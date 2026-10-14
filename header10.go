@@ -224,7 +224,7 @@ func (h *Header10) String() string {
 	fmt.Fprintf(&b, "    resource_dimension: %s\n", h.ResourceDimension)
 	fmt.Fprintf(&b, "    misc_flag: %s\n", h.MiscFlag)
 	fmt.Fprintf(&b, "    array_size: %d\n", h.ArraySize)
-	fmt.Fprintf(&b, "    alpha_mode: %s", h.AlphaMode)
+	fmt.Fprintf(&b, "    alpha_mode: %s\n", h.AlphaMode)
 	return b.String()
 }
 

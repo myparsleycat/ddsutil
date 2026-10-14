@@ -20,6 +20,10 @@ type DdsMetadata struct {
 	Layers      uint32
 	Mipmaps     uint32
 	ImageFormat ImageFormat
+	// AlphaMode is the alpha mode of the DX10 header, or
+	// AlphaModePreMultiplied for the DXT2 and DXT4 FourCCs. It is
+	// AlphaModeUnknown for other files without a DX10 header.
+	AlphaMode AlphaMode
 }
 
 // DdsReader provides random access to individual DDS mip levels without
@@ -76,21 +80,29 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 		return nil, ErrShortFile
 	}
 	dds := Dds{Header: header, Header10: header10}
-	format := dds.GetFormat()
+	format := dds.Format()
+	imageFormat, err := dds.ImageFormat()
+	if format == nil && err == nil {
+		// FourCC-only codes such as BC4U and BC5S have no DataFormat, but
+		// their image format has the same layout as a DXGI format.
+		if dxgi, ok := dxgiFromImageFormat(imageFormat); ok {
+			format = dxgi
+		}
+	}
 	if format == nil {
 		return nil, ErrUnsupportedFormat
 	}
-	imageFormat, err := DDSImageFormat(&dds)
 	if err != nil {
 		return nil, err
 	}
 	metadata := DdsMetadata{
-		Width:       dds.GetWidth(),
-		Height:      dds.GetHeight(),
-		Depth:       dds.GetDepth(),
+		Width:       dds.Width(),
+		Height:      dds.Height(),
+		Depth:       dds.Depth(),
 		Layers:      arrayLayerCount(&dds),
-		Mipmaps:     dds.GetNumMipmapLevels(),
+		Mipmaps:     dds.NumMipmapLevels(),
 		ImageFormat: imageFormat,
+		AlphaMode:   dds.AlphaMode(),
 	}
 	if metadata.Width == 0 {
 		return nil, InvalidFieldError("width")
@@ -327,7 +339,7 @@ func (r *DdsReader) mipLayout(layer, mipmap uint32) (ddsMipLayout, error) {
 		if !ok {
 			return ddsMipLayout{}, ErrUnsupportedFormat
 		}
-		pitchHeight := r.format.GetPitchHeight()
+		pitchHeight := r.format.PitchHeight()
 		if pitchHeight == 0 {
 			return ddsMipLayout{}, ErrUnsupportedFormat
 		}
@@ -366,7 +378,7 @@ func (r *DdsReader) mipLayout(layer, mipmap uint32) (ddsMipLayout, error) {
 }
 
 func (r *DdsReader) mipPitch(width uint32) (uint32, bool) {
-	pitch, ok := r.format.GetPitch(width)
+	pitch, ok := r.format.Pitch(width)
 	if !ok || pitch == 0 {
 		return 0, false
 	}
@@ -447,7 +459,7 @@ func rgbaLength(width, height, depth uint32) (int, error) {
 
 func uint64ToInt(value uint64) (int, error) {
 	if value > uint64(maxIntValue()) {
-		return 0, fmt.Errorf("DDS payload size exceeds addressable memory: %w", ErrOutOfBounds)
+		return 0, fmt.Errorf("DDS payload size exceeds addressable memory: %w", ErrTooLarge)
 	}
 	return int(value), nil
 }

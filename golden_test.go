@@ -24,7 +24,7 @@ func TestGoldenFiles(t *testing.T) {
 		{
 			name: "a8r8g8b8.dds",
 			build: func() (*Dds, error) {
-				dds, err := NewD3D(NewD3dParams{Height: 4, Width: 4, Format: D3DFormatA8R8G8B8})
+				dds, err := NewD3D(D3DParams{Height: 4, Width: 4, Format: D3DFormatA8R8G8B8})
 				if err != nil {
 					return nil, err
 				}
@@ -35,7 +35,7 @@ func TestGoldenFiles(t *testing.T) {
 		{
 			name: "dxt5_mip.dds",
 			build: func() (*Dds, error) {
-				dds, err := NewD3D(NewD3dParams{Height: 8, Width: 8, Format: D3DFormatDXT5, MipmapLevels: u32p(3)})
+				dds, err := NewD3D(D3DParams{Height: 8, Width: 8, Format: D3DFormatDXT5, MipmapLevels: 3})
 				if err != nil {
 					return nil, err
 				}
@@ -46,7 +46,7 @@ func TestGoldenFiles(t *testing.T) {
 		{
 			name: "bc1.dds",
 			build: func() (*Dds, error) {
-				dds, err := NewDXGI(NewDxgiParams{
+				dds, err := NewDxgi(DxgiParams{
 					Height: 8, Width: 8, Format: DxgiFormatBC1_UNorm,
 					ResourceDimension: D3D10ResourceDimensionTexture2D,
 					AlphaMode:         AlphaModeUnknown,
@@ -61,7 +61,7 @@ func TestGoldenFiles(t *testing.T) {
 		{
 			name: "rgba8.dds",
 			build: func() (*Dds, error) {
-				dds, err := NewDXGI(NewDxgiParams{
+				dds, err := NewDxgi(DxgiParams{
 					Height: 8, Width: 8, Format: DxgiFormatR8G8B8A8_UNorm,
 					ResourceDimension: D3D10ResourceDimensionTexture2D,
 					AlphaMode:         AlphaModeUnknown,
@@ -77,10 +77,10 @@ func TestGoldenFiles(t *testing.T) {
 			name: "cube.dds",
 			build: func() (*Dds, error) {
 				c2 := Caps2CUBEMAP | Caps2CUBEMAP_ALLFACES
-				dds, err := NewDXGI(NewDxgiParams{
+				dds, err := NewDxgi(DxgiParams{
 					Height: 4, Width: 4, Format: DxgiFormatR8G8B8A8_UNorm,
-					ArrayLayers:       u32p(6),
-					Caps2:             &c2,
+					ArrayLayers:       6,
+					Caps2:             c2,
 					IsCubemap:         true,
 					ResourceDimension: D3D10ResourceDimensionTexture2D,
 					AlphaMode:         AlphaModeUnknown,
@@ -95,7 +95,7 @@ func TestGoldenFiles(t *testing.T) {
 		{
 			name: "volume.dds",
 			build: func() (*Dds, error) {
-				dds, err := NewD3D(NewD3dParams{Height: 4, Width: 4, Depth: u32p(2), Format: D3DFormatA8R8G8B8})
+				dds, err := NewD3D(D3DParams{Height: 4, Width: 4, Depth: 2, Format: D3DFormatA8R8G8B8})
 				if err != nil {
 					return nil, err
 				}
@@ -141,9 +141,9 @@ func TestGoldenFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Read(golden) failed: %v", err)
 			}
-			if back.GetWidth() != dds.GetWidth() || back.GetHeight() != dds.GetHeight() {
+			if back.Width() != dds.Width() || back.Height() != dds.Height() {
 				t.Errorf("dims %dx%d, want %dx%d",
-					back.GetWidth(), back.GetHeight(), dds.GetWidth(), dds.GetHeight())
+					back.Width(), back.Height(), dds.Width(), dds.Height())
 			}
 			if len(back.Data) != len(dds.Data) {
 				t.Errorf("data len %d, want %d", len(back.Data), len(dds.Data))

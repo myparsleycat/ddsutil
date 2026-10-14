@@ -78,11 +78,23 @@ func mulOverflow(a, b int) (int, bool) {
 // calculateOffset returns the byte offset of (layer, depth_level, mipmap)
 // within a tightly packed surface, or ok=false when the request is out of
 // bounds or would overflow.
+//
+// Each layer stores its mipmaps in order and each mipmap stores its depth
+// slices in order, so a mipmap only has MipDimension(depth, mipmap) slices.
 func calculateOffset(layer, depthLevel, mipmap uint32, dimensions [3]uint32, blockDimensions [3]uint32, blockSizeInBytes int, mipmapsPerLayer uint32) (int, bool) {
 	width, height, depth := dimensions[0], dimensions[1], dimensions[2]
 	blockWidth, blockHeight, blockDepth := blockDimensions[0], blockDimensions[1], blockDimensions[2]
 
-	mipSizes := make([]int, 0, mipmapsPerLayer)
+	// A surface always has at least the base mip level.
+	if mipmapsPerLayer < 1 {
+		mipmapsPerLayer = 1
+	}
+	if mipmap >= mipmapsPerLayer || depthLevel >= MipDimension(depth, mipmap) {
+		return 0, false
+	}
+
+	// Assume mipmaps are tightly packed. This is the case for DDS surface data.
+	layerSize, mipOffset := 0, 0
 	for i := uint32(0); i < mipmapsPerLayer; i++ {
 		mipW := MipDimension(width, i)
 		mipH := MipDimension(height, i)
@@ -91,7 +103,12 @@ func calculateOffset(layer, depthLevel, mipmap uint32, dimensions [3]uint32, blo
 		if !ok {
 			return 0, false
 		}
-		mipSizes = append(mipSizes, size)
+		if i == mipmap {
+			mipOffset = layerSize
+		}
+		if layerSize, ok = addOverflow3(layerSize, size, 0); !ok {
+			return 0, false
+		}
 	}
 
 	// Each depth level adds another rounded 2D slice.
@@ -102,23 +119,10 @@ func calculateOffset(layer, depthLevel, mipmap uint32, dimensions [3]uint32, blo
 		return 0, false
 	}
 
-	// Assume mipmaps are tightly packed. This is the case for DDS surface data.
-	layerSize := 0
-	for _, s := range mipSizes {
-		layerSize += s
-	}
-
 	// Each layer should have the same number of mipmaps.
 	layerOffset, ok := mulOverflow(int(layer), layerSize)
 	if !ok {
 		return 0, false
-	}
-	if int(mipmap) > len(mipSizes) {
-		return 0, false
-	}
-	mipOffset := 0
-	for _, s := range mipSizes[:mipmap] {
-		mipOffset += s
 	}
 	depthOffset, ok := mulOverflow(mipSize2d, int(depthLevel))
 	if !ok {
@@ -150,39 +154,38 @@ func addOverflow3(a, b, c int) (int, bool) {
 // division) for deterministic, reproducible results.
 func downsampleRgba[T channel](newWidth, newHeight, newDepth, width, height, depth int, data []T) []T {
 	newData := make([]T, newWidth*newHeight*newDepth*4)
-	for z := 0; z < newDepth; z++ {
+	parallelFor(newDepth*newHeight, newWidth, func(row int) {
+		z, y := row/newHeight, row%newHeight
 		for x := 0; x < newWidth; x++ {
-			for y := 0; y < newHeight; y++ {
-				newIndex := (z*newWidth*newHeight + y*newWidth + x)
-				for c := 0; c < 4; c++ {
-					var sum float32
-					var count uint64
-					for z2 := 0; z2 < 2; z2++ {
-						sampledZ := (z * 2) + z2
-						if sampledZ < depth {
-							for y2 := 0; y2 < 2; y2++ {
-								sampledY := (y * 2) + y2
-								if sampledY < height {
-									for x2 := 0; x2 < 2; x2++ {
-										sampledX := (x * 2) + x2
-										if sampledX < width {
-											index := (sampledZ*width*height + sampledY*width + sampledX)
-											sum += toF32(data[index*4+c])
-											count++
-										}
+			newIndex := (z*newWidth*newHeight + y*newWidth + x)
+			for c := 0; c < 4; c++ {
+				var sum float32
+				var count uint64
+				for z2 := 0; z2 < 2; z2++ {
+					sampledZ := (z * 2) + z2
+					if sampledZ < depth {
+						for y2 := 0; y2 < 2; y2++ {
+							sampledY := (y * 2) + y2
+							if sampledY < height {
+								for x2 := 0; x2 < 2; x2++ {
+									sampledX := (x * 2) + x2
+									if sampledX < width {
+										index := (sampledZ*width*height + sampledY*width + sampledX)
+										sum += toF32(data[index*4+c])
+										count++
 									}
 								}
 							}
 						}
 					}
-					div := count
-					if div < 1 {
-						div = 1
-					}
-					newData[newIndex*4+c] = fromF32[T](sum / float32(div))
 				}
+				div := count
+				if div < 1 {
+					div = 1
+				}
+				newData[newIndex*4+c] = fromF32[T](sum / float32(div))
 			}
 		}
-	}
+	})
 	return newData
 }

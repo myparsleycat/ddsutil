@@ -99,32 +99,21 @@ func (f D3DFormat) String() string {
 	return fmt.Sprintf("D3DFormat(%d)", int(f))
 }
 
-// GetPitch implements DataFormat. See https://msdn.microsoft.com/en-us/library/bb943991.aspx
-func (f D3DFormat) GetPitch(width uint32) (uint32, bool) {
-	if f == D3DFormatR8G8_B8G8 || f == D3DFormatG8R8_G8B8 {
-		return ((width + 1) >> 1) * 4, true
-	}
-	if bpp, ok := f.GetBitsPerPixel(); ok {
-		return (width*uint32(bpp) + 7) / 8, true
-	}
-	if bs, ok := f.GetBlockSize(); ok {
-		w := (width + 3) / 4
-		if w < 1 {
-			w = 1
-		}
-		return w * bs, true
-	}
-	return 0, false
+// Pitch implements DataFormat. See https://msdn.microsoft.com/en-us/library/bb943991.aspx
+func (f D3DFormat) Pitch(width uint32) (uint32, bool) {
+	bpp, hasBPP := f.BitsPerPixel()
+	blockSize, hasBlockSize := f.BlockSize()
+	return defaultPitch(width, f == D3DFormatR8G8_B8G8 || f == D3DFormatG8R8_G8B8, bpp, hasBPP, blockSize, hasBlockSize)
 }
 
-// GetPitchHeight implements DataFormat.
-func (f D3DFormat) GetPitchHeight() uint32 {
-	bs, ok := f.GetBlockSize()
+// PitchHeight implements DataFormat.
+func (f D3DFormat) PitchHeight() uint32 {
+	bs, ok := f.BlockSize()
 	return defaultPitchHeight(bs, ok)
 }
 
-// GetBitsPerPixel implements DataFormat.
-func (f D3DFormat) GetBitsPerPixel() (uint8, bool) {
+// BitsPerPixel implements DataFormat.
+func (f D3DFormat) BitsPerPixel() (uint8, bool) {
 	switch f {
 	case D3DFormatA8B8G8R8:
 		return 32, true
@@ -205,8 +194,8 @@ func (f D3DFormat) GetBitsPerPixel() (uint8, bool) {
 	}
 }
 
-// GetBlockSize implements DataFormat.
-func (f D3DFormat) GetBlockSize() (uint32, bool) {
+// BlockSize implements DataFormat.
+func (f D3DFormat) BlockSize() (uint32, bool) {
 	switch f {
 	case D3DFormatDXT1:
 		return 8, true
@@ -217,8 +206,8 @@ func (f D3DFormat) GetBlockSize() (uint32, bool) {
 	}
 }
 
-// GetFourCC implements DataFormat.
-func (f D3DFormat) GetFourCC() (FourCC, bool) {
+// FourCC implements DataFormat.
+func (f D3DFormat) FourCC() (FourCC, bool) {
 	switch f {
 	case D3DFormatA8B8G8R8:
 		return 0, false
@@ -303,10 +292,10 @@ func (f D3DFormat) GetFourCC() (FourCC, bool) {
 // extension.
 func (f D3DFormat) RequiresExtension() bool { return false }
 
-// GetMinimumMipmapSizeInBytes implements DataFormat.
-func (f D3DFormat) GetMinimumMipmapSizeInBytes() (uint32, bool) {
-	bpp, hasBPP := f.GetBitsPerPixel()
-	bs, hasBS := f.GetBlockSize()
+// MinimumMipmapSizeInBytes implements DataFormat.
+func (f D3DFormat) MinimumMipmapSizeInBytes() (uint32, bool) {
+	bpp, hasBPP := f.BitsPerPixel()
+	bs, hasBS := f.BlockSize()
 	return defaultMinimumMipmapSizeInBytes(bpp, hasBPP, bs, hasBS)
 }
 

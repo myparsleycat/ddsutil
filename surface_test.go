@@ -47,6 +47,23 @@ func TestDecodeSurfaceTooManyMipmaps(t *testing.T) {
 	}
 }
 
+func TestDecodeSurfaceMissingLayers(t *testing.T) {
+	// Only the first layer is present, so the declared layer count must not
+	// decide the size of the output buffer.
+	surface := &Surface{
+		Width: 512, Height: 512, Depth: 1, Layers: ^uint32(0), Mipmaps: 1,
+		ImageFormat: BC1RgbaUnorm, Data: make([]uint8, 512*512/2),
+	}
+	_, err := surface.DecodeRgba8()
+	if se := surfaceErr(err); se == nil || se.Kind != SurfaceErrorMipmapDataOutOfBounds || se.Layer != 1 {
+		t.Fatalf("DecodeRgba8: expected MipmapDataOutOfBounds for layer 1, got %v", err)
+	}
+	_, err = surface.DecodeRgbaf32()
+	if se := surfaceErr(err); se == nil || se.Kind != SurfaceErrorMipmapDataOutOfBounds || se.Layer != 1 {
+		t.Fatalf("DecodeRgbaf32: expected MipmapDataOutOfBounds for layer 1, got %v", err)
+	}
+}
+
 func TestDecodeLayersMipmapsRgba8SingleMipmap(t *testing.T) {
 	surface := &Surface{
 		Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 3,
@@ -314,5 +331,113 @@ func TestDecodeEncodeAllFormatsF32(t *testing.T) {
 		if _, err := surface.Encode(format, QualityNormal, MipmapsGeneratedAutomatic); err != nil {
 			t.Errorf("encode f32 %v: %v", format, err)
 		}
+	}
+}
+
+// TestEncodeDecode3dMipmapsRoundTrip checks that every depth slice of every
+// mipmap of a 3D surface survives encoding and decoding.
+func TestEncodeDecode3dMipmapsRoundTrip(t *testing.T) {
+	for _, format := range []ImageFormat{Rgba8Unorm, Bgra8Unorm, BC1RgbaUnorm, BC7RgbaUnorm} {
+		format := format
+		t.Run(format.String(), func(t *testing.T) {
+			const w, h, d = 8, 8, 4
+			tolerance := 0
+			data := make([]uint8, w*h*d*4)
+			for i := range data {
+				data[i] = uint8(i * 7)
+			}
+			if format.IsBlockCompressed() {
+				// Use a constant color per slice so block compression
+				// reproduces it closely.
+				tolerance = 8
+				for z := 0; z < d; z++ {
+					for i := 0; i < w*h; i++ {
+						copy(data[(z*w*h+i)*4:], []uint8{uint8(z * 60), 128, 255 - uint8(z*60), 255})
+					}
+				}
+			}
+			surface := &SurfaceRgba8{Width: w, Height: h, Depth: d, Layers: 1, Mipmaps: 1, Data: data}
+			expected, err := surface.Encode(Rgba8Unorm, QualityNormal, MipmapsGeneratedAutomatic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := surface.Encode(format, QualityNormal, MipmapsGeneratedAutomatic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if encoded.Mipmaps != 4 {
+				t.Fatalf("mipmaps = %d, want 4", encoded.Mipmaps)
+			}
+			decoded, err := encoded.DecodeRgba8()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded.Data) != len(expected.Data) {
+				t.Fatalf("decoded %d bytes, want %d", len(decoded.Data), len(expected.Data))
+			}
+			for mipmap := uint32(0); mipmap < 4; mipmap++ {
+				for level := uint32(0); level < MipDimension(d, mipmap); level++ {
+					got := decoded.Get(0, level, mipmap)
+					want := expected.Get(0, level, mipmap)
+					if got == nil || want == nil {
+						t.Fatalf("mip %d level %d: missing data", mipmap, level)
+					}
+					for i := range want {
+						diff := int(got[i]) - int(want[i])
+						if diff < -tolerance || diff > tolerance {
+							t.Fatalf("mip %d level %d byte %d: got %d want %d", mipmap, level, i, got[i], want[i])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCalculateOffsetOutOfBounds(t *testing.T) {
+	dims := [3]uint32{8, 8, 8}
+	blocks := [3]uint32{1, 1, 1}
+	if _, ok := calculateOffset(0, 4, 1, dims, blocks, 4, 4); ok {
+		t.Error("depth level 4 of mipmap 1 (depth 4) should be out of bounds")
+	}
+	if _, ok := calculateOffset(0, 3, 1, dims, blocks, 4, 4); !ok {
+		t.Error("depth level 3 of mipmap 1 (depth 4) should be in bounds")
+	}
+	if _, ok := calculateOffset(0, 0, 4, dims, blocks, 4, 4); ok {
+		t.Error("mipmap 4 of a 4 mipmap surface should be out of bounds")
+	}
+	if _, ok := calculateOffset(0, 0, 0, dims, blocks, 4, 0); !ok {
+		t.Error("a surface with 0 mipmaps still has a base level")
+	}
+}
+
+func TestMipmapsGeneratedExact(t *testing.T) {
+	surface := &SurfaceRgba8{Width: 8, Height: 8, Depth: 1, Layers: 1, Mipmaps: 1, Data: make([]uint8, 8*8*4)}
+	for _, tc := range []struct {
+		mipmaps Mipmaps
+		want    uint32
+	}{
+		{MipmapsDisabled, 1},
+		{Mipmaps{}, 1},
+		{MipmapsGeneratedAutomatic, 4},
+		{MipmapsGeneratedExact(0), 1},
+		{MipmapsGeneratedExact(1), 1},
+		{MipmapsGeneratedExact(3), 3},
+	} {
+		got, err := surface.Encode(Rgba8Unorm, QualityFast, tc.mipmaps)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.mipmaps, err)
+		}
+		if got.Mipmaps != tc.want {
+			t.Errorf("%v: mipmaps = %d, want %d", tc.mipmaps, got.Mipmaps, tc.want)
+		}
+	}
+
+	_, err := surface.Encode(Rgba8Unorm, QualityFast, MipmapsGeneratedExact(5))
+	if e := surfaceErr(err); e == nil || e.Kind != SurfaceErrorUnexpectedMipmapCount || e.MaxTotalMipmaps != 4 {
+		t.Errorf("5 mipmaps for an 8x8 surface: err = %v, want UnexpectedMipmapCount", err)
+	}
+	if s := MipmapsGeneratedExact(3).String(); s != "MipmapsGeneratedExact(3)" {
+		t.Errorf("String() = %q", s)
 	}
 }

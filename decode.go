@@ -78,10 +78,14 @@ func (s *Surface) DecodeLayersMipmapsRgbaf32(layerStart, layerEnd, mipmapStart, 
 
 // decodeSurfaceU8 decodes the given layers and mipmaps to RGBA8 data.
 func decodeSurfaceU8(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd uint32) ([]uint8, error) {
-	var combined []uint8
+	size, err := decodedSize(surface, layerStart, layerEnd, mipmapStart, mipmapEnd)
+	if err != nil {
+		return nil, err
+	}
+	combined := make([]uint8, 0, size)
 	for layer := layerStart; layer < layerEnd; layer++ {
-		for level := uint32(0); level < surface.Depth; level++ {
-			for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+		for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+			for level := uint32(0); level < MipDimension(surface.Depth, mipmap); level++ {
 				data := surface.Get(layer, level, mipmap)
 				if data == nil {
 					return nil, &SurfaceError{Kind: SurfaceErrorMipmapDataOutOfBounds, Layer: layer, Mipmap: mipmap}
@@ -105,15 +109,20 @@ func decodeSurfaceU8(surface *Surface, layerStart, layerEnd, mipmapStart, mipmap
 
 // decodeSurfaceF32 decodes the given layers and mipmaps to RGBAF32 data.
 func decodeSurfaceF32(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd uint32) ([]float32, error) {
-	var combined []float32
+	size, err := decodedSize(surface, layerStart, layerEnd, mipmapStart, mipmapEnd)
+	if err != nil {
+		return nil, err
+	}
+	combined := make([]float32, 0, size)
 	for layer := layerStart; layer < layerEnd; layer++ {
-		for level := uint32(0); level < surface.Depth; level++ {
-			for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+		for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+			for level := uint32(0); level < MipDimension(surface.Depth, mipmap); level++ {
 				data := surface.Get(layer, level, mipmap)
 				if data == nil {
 					return nil, &SurfaceError{Kind: SurfaceErrorMipmapDataOutOfBounds, Layer: layer, Mipmap: mipmap}
 				}
 
+				// The mipmap index is already validated by Get above.
 				width := MipDimension(surface.Width, mipmap)
 				height := MipDimension(surface.Height, mipmap)
 
@@ -127,6 +136,46 @@ func decodeSurfaceF32(surface *Surface, layerStart, layerEnd, mipmapStart, mipma
 		}
 	}
 	return combined, nil
+}
+
+// decodedSize returns the number of RGBA channel values in the given layers
+// and mipmaps of surface, used to preallocate the decoded output. Out of
+// range layers and mipmaps count as empty; decoding reports them. It returns
+// 0 if surface.Data does not hold every requested image, so the header
+// fields alone never decide the size of an allocation.
+func decodedSize(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd uint32) (int, error) {
+	var layerSize uint64
+	for mipmap := mipmapStart; mipmap < mipmapEnd && mipmap < surface.Mipmaps; mipmap++ {
+		pixels, ok := checkedMul(uint64(MipDimension(surface.Width, mipmap)), uint64(MipDimension(surface.Height, mipmap)))
+		if ok {
+			pixels, ok = checkedMul(pixels, uint64(MipDimension(surface.Depth, mipmap))*4)
+		}
+		if ok {
+			layerSize, ok = checkedAdd(layerSize, pixels)
+		}
+		if !ok {
+			return 0, &SurfaceError{Kind: SurfaceErrorPixelCountWouldOverflow, Width: surface.Width, Height: surface.Height, Depth: surface.Depth}
+		}
+	}
+	layers := uint64(0)
+	if layerEnd > layerStart {
+		layers = uint64(min(layerEnd, surface.Layers) - min(layerStart, surface.Layers))
+	}
+	size, ok := checkedMul(layerSize, layers)
+	if !ok || size > uint64(maxIntValue()) {
+		return 0, &SurfaceError{Kind: SurfaceErrorPixelCountWouldOverflow, Width: surface.Width, Height: surface.Height, Depth: surface.Depth}
+	}
+	if size == 0 {
+		return 0, nil
+	}
+	// Images are stored in order of layer, mipmap and depth level, so the
+	// last requested image ends after all the others.
+	lastLayer := min(layerEnd, surface.Layers) - 1
+	lastMipmap := min(mipmapEnd, surface.Mipmaps) - 1
+	if surface.Get(lastLayer, MipDimension(surface.Depth, lastMipmap)-1, lastMipmap) == nil {
+		return 0, nil
+	}
+	return int(size), nil
 }
 
 // decodeU8 decodes 2D image data to RGBA8.

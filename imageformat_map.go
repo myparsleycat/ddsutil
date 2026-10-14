@@ -34,32 +34,32 @@ func (d *Dds) Bytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DDSImageFormat returns the ImageFormat of the DDS, or an error describing
+// ImageFormat returns the ImageFormat of the DDS, or an error describing
 // the unrecognized format.
-func DDSImageFormat(dds *Dds) (ImageFormat, error) {
+func (d *Dds) ImageFormat() (ImageFormat, error) {
 	// Legacy D3D formats first: the DXTn and float FourCC codes, plus the
 	// RGB bitmask layouts, are all detected by the container layer.
-	if d3d, ok := dds.GetD3DFormat(); ok {
+	if d3d, ok := d.D3DFormat(); ok {
 		if f, ok := imageFormatFromD3D(d3d); ok {
 			return f, nil
 		}
 	}
 	// DX10 extension header carries the DXGI format.
-	if dds.Header10 != nil {
-		if f, ok := imageFormatFromDXGI(dds.Header10.DxgiFormat); ok {
+	if d.Header10 != nil {
+		if f, ok := imageFormatFromDXGI(d.Header10.DxgiFormat); ok {
 			return f, nil
 		}
 	}
 	// FourCC-only codes (BC4U/BC4S/ATI2/BC5U/BC5S) that are not part of the
 	// legacy D3D format table.
-	if dds.Header.SPF.FourCC != nil {
-		if f, ok := imageFormatFromFourCC(*dds.Header.SPF.FourCC); ok {
+	if d.Header.SPF.FourCC != nil {
+		if f, ok := imageFormatFromFourCC(*d.Header.SPF.FourCC); ok {
 			return f, nil
 		}
 	}
 	return 0, &SurfaceError{
 		Kind:      SurfaceErrorUnsupportedDdsFormat,
-		DdsFormat: ddsFormatInfo(dds),
+		DdsFormat: ddsFormatInfo(d),
 	}
 }
 
@@ -69,7 +69,7 @@ func ddsFormatInfo(dds *Dds) *DdsFormatInfo {
 		f := dds.Header10.DxgiFormat
 		info.DXGI = &f
 	}
-	if f, ok := dds.GetD3DFormat(); ok {
+	if f, ok := dds.D3DFormat(); ok {
 		info.D3D = &f
 	}
 	if dds.Header.SPF.FourCC != nil {
@@ -343,42 +343,39 @@ func dxgiFromImageFormat(value ImageFormat) (DxgiFormat, bool) {
 func (s *Surface) ToDds() (*Dds, error) {
 	var dds *Dds
 
+	var depth, mipmapLevels uint32
+	if s.Depth > 1 {
+		depth = s.Depth
+	}
+	if s.Mipmaps > 1 {
+		mipmapLevels = s.Mipmaps
+	}
+	var caps2 Caps2
+	if s.Layers == 6 {
+		caps2 = Caps2CUBEMAP | Caps2CUBEMAP_ALLFACES
+	}
+
 	if format, ok := dxgiFromImageFormat(s.ImageFormat); ok {
-		var depth *uint32
-		if s.Depth > 1 {
-			d := s.Depth
-			depth = &d
-		}
-		var mipmapLevels *uint32
-		if s.Mipmaps > 1 {
-			m := s.Mipmaps
-			mipmapLevels = &m
-		}
-		var arrayLayers *uint32
-		if s.Layers > 1 && s.Layers != 6 {
-			l := s.Layers
-			arrayLayers = &l
-		}
-		var caps2 Caps2
-		if s.Layers == 6 {
-			caps2 = Caps2CUBEMAP | Caps2CUBEMAP_ALLFACES
+		var arrayLayers uint32
+		if s.Layers > 1 {
+			arrayLayers = s.Layers
 		}
 		resourceDimension := D3D10ResourceDimensionTexture2D
 		if s.Depth > 1 {
 			resourceDimension = D3D10ResourceDimensionTexture3D
 		}
-		d, err := NewDXGI(NewDxgiParams{
+		d, err := newDxgi(DxgiParams{
 			Height:            s.Height,
 			Width:             s.Width,
 			Depth:             depth,
 			Format:            format,
 			MipmapLevels:      mipmapLevels,
 			ArrayLayers:       arrayLayers,
-			Caps2:             &caps2,
+			Caps2:             caps2,
 			IsCubemap:         s.Layers == 6,
 			ResourceDimension: resourceDimension,
 			AlphaMode:         AlphaModeStraight,
-		})
+		}, false)
 		if err != nil {
 			return nil, &CreateDdsError{Kind: CreateDdsErrorDds, Err: err}
 		}
@@ -389,34 +386,21 @@ func (s *Surface) ToDds() (*Dds, error) {
 		if !ok {
 			return nil, &CreateDdsError{Kind: CreateDdsErrorCompressSurface, Err: &SurfaceError{Kind: SurfaceErrorUnsupportedEncodeFormat, Format: s.ImageFormat}}
 		}
-		var depth *uint32
-		if s.Depth > 1 {
-			d := s.Depth
-			depth = &d
-		}
-		var mipmapLevels *uint32
-		if s.Mipmaps > 1 {
-			m := s.Mipmaps
-			mipmapLevels = &m
-		}
-		var caps2 Caps2
-		if s.Layers == 6 {
-			caps2 = Caps2CUBEMAP | Caps2CUBEMAP_ALLFACES
-		}
-		d, err := NewD3D(NewD3dParams{
+		d, err := newD3D(D3DParams{
 			Height:       s.Height,
 			Width:        s.Width,
 			Depth:        depth,
 			Format:       format,
 			MipmapLevels: mipmapLevels,
-			Caps2:        &caps2,
-		})
+			Caps2:        caps2,
+		}, false)
 		if err != nil {
 			return nil, &CreateDdsError{Kind: CreateDdsErrorDds, Err: err}
 		}
 		dds = d
 	}
 
+	// The headers were created without data; copy the surface data.
 	dds.Data = append([]byte(nil), s.Data...)
 
 	return dds, nil
@@ -424,12 +408,12 @@ func (s *Surface) ToDds() (*Dds, error) {
 
 // SurfaceFromDds creates a view over the data in dds without any copies.
 func SurfaceFromDds(dds *Dds) (*Surface, error) {
-	width := dds.GetWidth()
-	height := dds.GetHeight()
-	depth := dds.GetDepth()
+	width := dds.Width()
+	height := dds.Height()
+	depth := dds.Depth()
 	layers := arrayLayerCount(dds)
-	mipmaps := dds.GetNumMipmapLevels()
-	imageFormat, err := DDSImageFormat(dds)
+	mipmaps := dds.NumMipmapLevels()
+	imageFormat, err := dds.ImageFormat()
 	if err != nil {
 		return nil, err
 	}
@@ -448,13 +432,13 @@ func SurfaceFromDds(dds *Dds) (*Surface, error) {
 func arrayLayerCount(dds *Dds) uint32 {
 	// Array layers for DDS are calculated differently for cube maps.
 	if dds.Header10 != nil && dds.Header10.MiscFlag.Contains(MiscFlagTEXTURECUBE) {
-		n := dds.GetNumArrayLayers()
+		n := dds.NumArrayLayers()
 		if n < 1 {
 			n = 1
 		}
 		return n * 6
 	}
-	n := dds.GetNumArrayLayers()
+	n := dds.NumArrayLayers()
 	if n < 1 {
 		n = 1
 	}

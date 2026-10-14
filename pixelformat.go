@@ -309,10 +309,10 @@ func optFourCC(p *FourCC) string {
 // PixelFormatFromD3D builds a PixelFormat describing a D3DFormat.
 func PixelFormatFromD3D(format D3DFormat) PixelFormat {
 	pf := DefaultPixelFormat()
-	if bpp, ok := format.GetBitsPerPixel(); ok {
+	if bpp, ok := format.BitsPerPixel(); ok {
 		pf.Flags.Insert(PixelFormatFlagsRGB)
 		pf.RGBBitCount = u32p(uint32(bpp))
-	} else if fc, ok := format.GetFourCC(); ok {
+	} else if fc, ok := format.FourCC(); ok {
 		pf.Flags.Insert(PixelFormatFlagsFOURCC)
 		pf.FourCC = &fc
 	}
@@ -330,7 +330,7 @@ func PixelFormatFromD3D(format D3DFormat) PixelFormat {
 // use the DX10 extension for DXGI formats.
 func PixelFormatFromDXGI(format DxgiFormat) PixelFormat {
 	pf := DefaultPixelFormat()
-	if bpp, ok := format.GetBitsPerPixel(); ok {
+	if bpp, ok := format.BitsPerPixel(); ok {
 		pf.Flags.Insert(PixelFormatFlagsRGB) // means uncompressed
 		pf.RGBBitCount = u32p(uint32(bpp))
 	}

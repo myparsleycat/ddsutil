@@ -73,23 +73,26 @@ func (s *SurfaceRgba32Float) surfaceMipmaps() uint32       { return s.Mipmaps }
 func (s *SurfaceRgba32Float) get(l, d, m uint32) []float32 { return s.Get(l, d, m) }
 
 func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageFormat, quality Quality, mipmaps Mipmaps) (*Surface, error) {
+	maxMipmaps := maxMipmapCount(max3(surface.surfaceWidth(), surface.surfaceHeight(), surface.surfaceDepth()))
 	var numMipmaps uint32
-	switch {
-	case mipmaps == MipmapsDisabled:
-		numMipmaps = 1
-	case mipmaps == MipmapsFromSurface:
+	switch mipmaps.mode {
+	case mipmapsFromSurface:
 		numMipmaps = surface.surfaceMipmaps()
-	case mipmaps == MipmapsGeneratedAutomatic:
-		numMipmaps = maxMipmapCount(max3(surface.surfaceWidth(), surface.surfaceHeight(), surface.surfaceDepth()))
-	default:
-		if count, ok := mipmaps.GeneratedExactCount(); ok {
-			numMipmaps = count
-		} else {
-			numMipmaps = 1
-		}
+	case mipmapsGeneratedAutomatic:
+		numMipmaps = maxMipmaps
+	case mipmapsGeneratedExact:
+		numMipmaps = mipmaps.count
+	}
+	// A count of 0 still encodes the base mip level.
+	if numMipmaps < 1 {
+		numMipmaps = 1
+	}
+	// Encode validated the surface, so maxMipmaps is at least 1.
+	if numMipmaps > maxMipmaps {
+		return nil, &SurfaceError{Kind: SurfaceErrorUnexpectedMipmapCount, Mipmaps: numMipmaps, MaxTotalMipmaps: maxMipmaps}
 	}
 
-	useSurface := mipmaps == MipmapsFromSurface
+	useSurface := mipmaps.mode == mipmapsFromSurface
 
 	var surfaceData []byte
 
@@ -162,8 +165,11 @@ func getMipmapData[S getMipmapSurface[P], P channel](surface S, layer, mipmap ui
 	mipDepth := MipDimension(surface.surfaceDepth(), mipmap)
 
 	var data []P
-	for level := uint32(0); level < surface.surfaceDepth(); level++ {
+	for level := uint32(0); level < mipDepth; level++ {
 		newData := surface.get(layer, level, mipmap)
+		if newData == nil {
+			return nil, &SurfaceError{Kind: SurfaceErrorMipmapDataOutOfBounds, Layer: layer, Mipmap: mipmap}
+		}
 		data = append(data, newData...)
 	}
 
@@ -241,10 +247,14 @@ func encodeU8(width, height uint32, data []uint8, format ImageFormat, quality Qu
 		return encodeBcn(bcFmt2, width, height, data, quality)
 	case BC3RgbaUnorm, BC3RgbaUnormSrgb:
 		return encodeBcn(bcFmt3, width, height, data, quality)
-	case BC4RUnorm, BC4RSnorm:
+	case BC4RUnorm:
 		return encodeBcn(bcFmt4, width, height, data, quality)
-	case BC5RgUnorm, BC5RgSnorm:
+	case BC4RSnorm:
+		return encodeBcn(bcFmt4S, width, height, unorm8ToSnorm8Slice(data), quality)
+	case BC5RgUnorm:
 		return encodeBcn(bcFmt5, width, height, data, quality)
+	case BC5RgSnorm:
+		return encodeBcn(bcFmt5S, width, height, unorm8ToSnorm8Slice(data), quality)
 	case BC6hRgbUfloat, BC6hRgbSfloat:
 		return encodeBcn(bcFmt6, width, height, data, quality)
 	case BC7RgbaUnorm, BC7RgbaUnormSrgb:
@@ -312,12 +322,16 @@ func encodeF32(width, height uint32, data []float32, format ImageFormat, quality
 	case Rgba8Snorm:
 		return encodeRgbaF32(formatRgba8Snorm, width, height, data)
 	case BC4RSnorm, BC5RgSnorm:
-		// No dedicated encoder for snorm formats.
-		rgba8 := make([]uint8, len(data))
+		// The signed BCn encoders take snorm8 bit patterns.
+		snorm8 := make([]uint8, len(data))
 		for i, f := range data {
-			rgba8[i] = uint8(floatToSnorm8(f))
+			snorm8[i] = uint8(floatToSnorm8(f))
 		}
-		return encodeU8(width, height, rgba8, format, quality)
+		bc := bcFmt4S
+		if format == BC5RgSnorm {
+			bc = bcFmt5S
+		}
+		return encodeBcn(bc, width, height, snorm8, quality)
 	case BC6hRgbUfloat, BC6hRgbSfloat:
 		return encodeBcn(bcFmt6, width, height, data, quality)
 	case R16Float:
@@ -351,4 +365,14 @@ func encodeF32(width, height uint32, data []float32, format ImageFormat, quality
 		}
 		return encodeU8(width, height, rgba8, format, quality)
 	}
+}
+
+// unorm8ToSnorm8Slice maps RGBA8 data to snorm8 bit patterns using the
+// inverse of the remapping applied when decoding snorm formats to RGBA8.
+func unorm8ToSnorm8Slice(data []uint8) []uint8 {
+	out := make([]uint8, len(data))
+	for i, u := range data {
+		out[i] = unorm8ToSnorm8(u)
+	}
+	return out
 }
