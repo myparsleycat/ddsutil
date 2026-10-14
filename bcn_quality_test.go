@@ -127,3 +127,31 @@ func BenchmarkEncode(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDecode(b *testing.B) {
+	surface := testPattern(2048)
+	for _, format := range []ImageFormat{BC1RgbaUnorm, BC7RgbaUnorm} {
+		encoded, err := surface.Encode(format, QualityFast, MipmapsGeneratedAutomatic)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(format.String(), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := encoded.DecodeRgba8(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkGenerateMipmaps(b *testing.B) {
+	surface := testPattern(2048)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := surface.Encode(Rgba8Unorm, QualityFast, MipmapsGeneratedAutomatic); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

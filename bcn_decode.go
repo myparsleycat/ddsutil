@@ -26,16 +26,18 @@ func decodeBcn(bc bcFormat, width, height uint32, data []byte) ([]uint8, error) 
 	rgba := make([]uint8, int(width)*int(height)*channels)
 
 	// BCN formats lay out blocks in row-major order.
-	blockStart := 0
 	blockSize := bc.blockSizeInBytes()
-	for y := uint32(0); y < height; y += blockHeight {
-		for x := uint32(0); x < width; x += blockWidth {
+	blocksX := int((width + blockWidth - 1) / blockWidth)
+	blocksY := int((height + blockHeight - 1) / blockHeight)
+	parallelFor(blocksY, blocksX, func(by int) {
+		blockStart := by * blocksX * blockSize
+		for bx := 0; bx < blocksX; bx++ {
 			block := data[blockStart : blockStart+blockSize]
 			pixels := decompressBlock(bc, block)
-			putRgbaBlockU8(rgba, &pixels, int(x), int(y), int(width), int(height))
+			putRgbaBlockU8(rgba, &pixels, bx*blockWidth, by*blockHeight, int(width), int(height))
 			blockStart += blockSize
 		}
-	}
+	})
 
 	return rgba, nil
 }
@@ -52,16 +54,18 @@ func decodeBcnF32(bc bcFormat, width, height uint32, data []byte) ([]float32, er
 
 	rgba := make([]float32, int(width)*int(height)*channels)
 
-	blockStart := 0
 	blockSize := bc.blockSizeInBytes()
-	for y := uint32(0); y < height; y += blockHeight {
-		for x := uint32(0); x < width; x += blockWidth {
+	blocksX := int((width + blockWidth - 1) / blockWidth)
+	blocksY := int((height + blockHeight - 1) / blockHeight)
+	parallelFor(blocksY, blocksX, func(by int) {
+		blockStart := by * blocksX * blockSize
+		for bx := 0; bx < blocksX; bx++ {
 			block := data[blockStart : blockStart+blockSize]
 			pixels := decompressBlockF32(bc, block)
-			putRgbaBlockF32(rgba, &pixels, int(x), int(y), int(width), int(height))
+			putRgbaBlockF32(rgba, &pixels, bx*blockWidth, by*blockHeight, int(width), int(height))
 			blockStart += blockSize
 		}
-	}
+	})
 
 	return rgba, nil
 }

@@ -154,39 +154,38 @@ func addOverflow3(a, b, c int) (int, bool) {
 // division) for deterministic, reproducible results.
 func downsampleRgba[T channel](newWidth, newHeight, newDepth, width, height, depth int, data []T) []T {
 	newData := make([]T, newWidth*newHeight*newDepth*4)
-	for z := 0; z < newDepth; z++ {
+	parallelFor(newDepth*newHeight, newWidth, func(row int) {
+		z, y := row/newHeight, row%newHeight
 		for x := 0; x < newWidth; x++ {
-			for y := 0; y < newHeight; y++ {
-				newIndex := (z*newWidth*newHeight + y*newWidth + x)
-				for c := 0; c < 4; c++ {
-					var sum float32
-					var count uint64
-					for z2 := 0; z2 < 2; z2++ {
-						sampledZ := (z * 2) + z2
-						if sampledZ < depth {
-							for y2 := 0; y2 < 2; y2++ {
-								sampledY := (y * 2) + y2
-								if sampledY < height {
-									for x2 := 0; x2 < 2; x2++ {
-										sampledX := (x * 2) + x2
-										if sampledX < width {
-											index := (sampledZ*width*height + sampledY*width + sampledX)
-											sum += toF32(data[index*4+c])
-											count++
-										}
+			newIndex := (z*newWidth*newHeight + y*newWidth + x)
+			for c := 0; c < 4; c++ {
+				var sum float32
+				var count uint64
+				for z2 := 0; z2 < 2; z2++ {
+					sampledZ := (z * 2) + z2
+					if sampledZ < depth {
+						for y2 := 0; y2 < 2; y2++ {
+							sampledY := (y * 2) + y2
+							if sampledY < height {
+								for x2 := 0; x2 < 2; x2++ {
+									sampledX := (x * 2) + x2
+									if sampledX < width {
+										index := (sampledZ*width*height + sampledY*width + sampledX)
+										sum += toF32(data[index*4+c])
+										count++
 									}
 								}
 							}
 						}
 					}
-					div := count
-					if div < 1 {
-						div = 1
-					}
-					newData[newIndex*4+c] = fromF32[T](sum / float32(div))
 				}
+				div := count
+				if div < 1 {
+					div = 1
+				}
+				newData[newIndex*4+c] = fromF32[T](sum / float32(div))
 			}
 		}
-	}
+	})
 	return newData
 }
