@@ -81,10 +81,17 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 	}
 	dds := Dds{Header: header, Header10: header10}
 	format := dds.Format()
+	imageFormat, err := dds.ImageFormat()
+	if format == nil && err == nil {
+		// FourCC-only codes such as BC4U and BC5S have no DataFormat, but
+		// their image format has the same layout as a DXGI format.
+		if dxgi, ok := dxgiFromImageFormat(imageFormat); ok {
+			format = dxgi
+		}
+	}
 	if format == nil {
 		return nil, ErrUnsupportedFormat
 	}
-	imageFormat, err := dds.ImageFormat()
 	if err != nil {
 		return nil, err
 	}

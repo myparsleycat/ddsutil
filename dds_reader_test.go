@@ -94,6 +94,56 @@ func TestDdsReaderAlphaMode(t *testing.T) {
 	}
 }
 
+func TestDdsReaderReadsLegacyBc4Bc5FourCC(t *testing.T) {
+	for _, tc := range []struct {
+		fourCC   FourCC
+		format   ImageFormat
+		template D3DFormat
+	}{
+		{FourCCBC4_UNORM, BC4RUnorm, D3DFormatDXT1},
+		{FourCCBC4_SNORM, BC4RSnorm, D3DFormatDXT1},
+		{fourccBC5U, BC5RgUnorm, D3DFormatDXT5},
+		{FourCCBC5_SNORM, BC5RgSnorm, D3DFormatDXT5},
+	} {
+		encoded, err := readerFixtureSurface(8, 8, 1, 1).Encode(tc.format, QualityFast, MipmapsDisabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A legacy header with the same block size, retagged with the
+		// FourCC, which has no DataFormat.
+		dds, err := NewD3D(D3DParams{Width: 8, Height: 8, Format: tc.template})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fourCC := tc.fourCC
+		dds.Header.SPF.FourCC = &fourCC
+		dds.Data = encoded.Data
+		if dds.Format() != nil {
+			t.Fatalf("%v: Format = %v, want nil", tc.fourCC, dds.Format())
+		}
+		want, err := DecodeLayersMipmapsDds(dds, 0, 1, 0, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		raw := ddsBytes(t, dds)
+		reader, err := NewDdsReader(bytes.NewReader(raw), int64(len(raw)))
+		if err != nil {
+			t.Fatalf("%v: %v", tc.fourCC, err)
+		}
+		if got := reader.Metadata().ImageFormat; got != tc.format {
+			t.Fatalf("%v: image format = %v, want %v", tc.fourCC, got, tc.format)
+		}
+		got, err := reader.DecodeMipRgba8(0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Fatalf("%v: decoded data differs from DecodeLayersMipmapsDds", tc.fourCC)
+		}
+	}
+}
+
 func TestDdsReaderReadsClassicDdsMip(t *testing.T) {
 	mipmaps := uint32(2)
 	dds, err := NewD3D(D3DParams{Width: 8, Height: 8, Format: D3DFormatDXT1, MipmapLevels: mipmaps})
