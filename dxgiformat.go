@@ -275,7 +275,10 @@ func (f DxgiFormat) String() string {
 func ParseDxgiFormat(name string) (DxgiFormat, bool) {
 	name = strings.TrimPrefix(strings.ToUpper(name), "DXGI_FORMAT_")
 	for f, n := range dxgiFormatNames {
-		if strings.ToUpper(n) == name {
+		// Go identifiers cannot start with a digit, so DXGI_FORMAT_420_OPAQUE
+		// is named Format_420_Opaque.
+		upper := strings.ToUpper(n)
+		if upper == name || strings.TrimPrefix(upper, "FORMAT_") == name {
 			return f, true
 		}
 	}

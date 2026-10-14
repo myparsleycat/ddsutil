@@ -518,6 +518,7 @@ func TestParseDxgiFormat(t *testing.T) {
 		"bc7_unorm_srgb":             DxgiFormatBC7_UNorm_sRGB,
 		"DXGI_FORMAT_BC7_UNORM_SRGB": DxgiFormatBC7_UNorm_sRGB,
 		"DXGI_FORMAT_R8G8B8A8_UNORM": DxgiFormatR8G8B8A8_UNorm,
+		"DXGI_FORMAT_420_OPAQUE":     DxgiFormatFormat_420_Opaque,
 	} {
 		if got, ok := ParseDxgiFormat(name); !ok || got != want {
 			t.Errorf("ParseDxgiFormat(%q) = %v, %v; want %v", name, got, ok, want)
