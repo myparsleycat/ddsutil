@@ -49,10 +49,12 @@ The API now follows Go naming conventions. Update callers as follows:
 - `CreateImageError` unwraps to its `SurfaceError`.
 - `Mipmaps` implements `fmt.Stringer`.
 - `ParseDxgiFormat`, which looks up a DXGI format by name.
-- `NRGBAFromDds`, which returns an `image.NRGBA` matching the straight alpha
-  stored in DDS files.
-- `DdsMetadata.AlphaMode`, the DX10 alpha mode, or premultiplied for the
-  DXT2 and DXT4 FourCCs.
+- `NRGBAFromDds`, which returns an `image.NRGBA` with straight alpha,
+  converting files marked as premultiplied.
+- `Dds.AlphaMode` and `DdsMetadata.AlphaMode`, the DX10 alpha mode, or
+  premultiplied for the DXT2 and DXT4 FourCCs.
+- `UnpremultiplyRgba8`, which converts premultiplied RGBA8 pixels to straight
+  alpha.
 
 ### Fixed
 
@@ -87,6 +89,7 @@ The API now follows Go naming conventions. Update callers as follows:
   correctly (it was treated as premultiplied) while still converting files
   marked as premultiplied, and names the output after the input by default.
 - `retag` accepts any DXGI format name, converts legacy headers to DX10,
+  keeps the premultiplied alpha of DXT2 and DXT4 in the DX10 alpha mode,
   rejects formats with a different data size unless `-force` is given, and
   writes atomically, optionally to `-o`, through symbolic links and keeping
   the file's permissions and, where allowed, its owner and group.

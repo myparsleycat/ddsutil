@@ -8,9 +8,11 @@ import (
 // ImageFromDds decodes the given mip level from the DDS to an RGBA image.
 // Array layers are arranged vertically from top to bottom.
 //
-// The pixels hold the straight (non-premultiplied) alpha stored in the DDS,
-// whereas image.RGBA is defined as alpha-premultiplied. Use NRGBAFromDds
-// when the image has alpha and will be composited or encoded, e.g. as PNG.
+// The pixels hold the alpha as stored in the DDS, which is usually straight
+// (non-premultiplied), whereas image.RGBA is defined as alpha-premultiplied;
+// only files whose AlphaMode is AlphaModePreMultiplied match it. Use
+// NRGBAFromDds when the image has alpha and will be composited or encoded,
+// e.g. as PNG.
 func ImageFromDds(dds *Dds, mipmap uint32) (*image.RGBA, error) {
 	layers := arrayLayerCount(dds)
 	surface, err := DecodeLayersMipmapsDds(dds, 0, layers, mipmap, mipmap+1)
@@ -24,15 +26,34 @@ func ImageFromDds(dds *Dds, mipmap uint32) (*image.RGBA, error) {
 	return surface.IntoImage()
 }
 
-// NRGBAFromDds decodes the given mip level from the DDS to an NRGBA image,
-// which matches the straight alpha stored in DDS files. Array layers are
-// arranged vertically from top to bottom.
+// NRGBAFromDds decodes the given mip level from the DDS to an NRGBA image
+// with straight alpha. Pixels of files whose AlphaMode is
+// AlphaModePreMultiplied are converted with UnpremultiplyRgba8. Array layers
+// are arranged vertically from top to bottom.
 func NRGBAFromDds(dds *Dds, mipmap uint32) (*image.NRGBA, error) {
 	img, err := ImageFromDds(dds, mipmap)
 	if err != nil {
 		return nil, err
 	}
+	if dds.AlphaMode() == AlphaModePreMultiplied {
+		UnpremultiplyRgba8(img.Pix)
+	}
 	return &image.NRGBA{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, nil
+}
+
+// UnpremultiplyRgba8 converts RGBA8 pixels from premultiplied to straight
+// alpha in place. Color channels larger than alpha, which premultiplied data
+// cannot hold, become 255, and fully transparent pixels are left unchanged.
+func UnpremultiplyRgba8(pixels []byte) {
+	for i := 0; i+3 < len(pixels); i += 4 {
+		a := uint32(pixels[i+3])
+		if a == 0 || a == 255 {
+			continue
+		}
+		for c := i; c < i+3; c++ {
+			pixels[c] = uint8(min((uint32(pixels[c])*255+a/2)/a, 255))
+		}
+	}
 }
 
 // DdsFromImage encodes image to a 2D DDS file with the given format.

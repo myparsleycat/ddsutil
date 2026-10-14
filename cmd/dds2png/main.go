@@ -83,7 +83,7 @@ func convert(input, output string, layer, mip, slice uint32) error {
 	}
 	// PNG stores straight alpha, which matches image.NRGBA.
 	if metadata.AlphaMode == ddsutil.AlphaModePreMultiplied {
-		unpremultiply(pixels)
+		ddsutil.UnpremultiplyRgba8(pixels)
 	}
 	img := &image.NRGBA{
 		Pix:    pixels,
@@ -104,19 +104,4 @@ func convert(input, output string, layer, mip, slice uint32) error {
 	}
 	fmt.Printf("wrote %s (%dx%d)\n", output, img.Rect.Dx(), img.Rect.Dy())
 	return nil
-}
-
-// unpremultiply converts RGBA8 pixels from premultiplied to straight alpha.
-// Color channels larger than alpha, which premultiplied data cannot hold,
-// are clamped to 255.
-func unpremultiply(pixels []byte) {
-	for i := 0; i+3 < len(pixels); i += 4 {
-		a := uint32(pixels[i+3])
-		if a == 0 || a == 255 {
-			continue
-		}
-		for c := i; c < i+3; c++ {
-			pixels[c] = uint8(min((uint32(pixels[c])*255+a/2)/a, 255))
-		}
-	}
 }

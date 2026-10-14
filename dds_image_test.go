@@ -3,6 +3,7 @@ package ddsutil
 import (
 	"errors"
 	"image"
+	"image/color"
 	"testing"
 )
 
@@ -78,6 +79,43 @@ func TestNRGBAFromDdsKeepsStraightAlpha(t *testing.T) {
 	}
 	if c := img.NRGBAAt(1, 1); c.R != 200 || c.G != 100 || c.B != 50 || c.A != 64 {
 		t.Fatalf("NRGBAAt = %v, want {200 100 50 64}", c)
+	}
+}
+
+func TestNRGBAFromDdsUnpremultiplies(t *testing.T) {
+	dds, err := NewDxgi(DxgiParams{Width: 1, Height: 1, Format: DxgiFormatR8G8B8A8_UNorm, AlphaMode: AlphaModePreMultiplied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(dds.Data, []uint8{128, 0, 0, 128})
+	img, err := NRGBAFromDds(dds, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := img.NRGBAAt(0, 0); c != (color.NRGBA{255, 0, 0, 128}) {
+		t.Fatalf("DX10 premultiplied: NRGBAAt = %v, want {255 0 0 128}", c)
+	}
+
+	// DXT2 is BC2 with premultiplied alpha.
+	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for i := 0; i < len(src.Pix); i += 4 {
+		copy(src.Pix[i:], []uint8{136, 0, 0, 136})
+	}
+	encoded, err := SurfaceRgba8FromImage(src).Encode(BC2RgbaUnorm, QualityFast, MipmapsDisabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dds, err = NewD3D(D3DParams{Width: 4, Height: 4, Format: D3DFormatDXT2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dds.Data = encoded.Data
+	img, err = NRGBAFromDds(dds, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := img.NRGBAAt(1, 1); c.R < 240 || c.G != 0 || c.B != 0 || c.A != 136 {
+		t.Fatalf("DXT2: NRGBAAt = %v, want about {255 0 0 136}", c)
 	}
 }
 
