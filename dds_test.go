@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -498,5 +499,31 @@ func TestErrorsWrapSentinels(t *testing.T) {
 	var target *SurfaceError
 	if !errors.As(err, &target) || target != surfaceErr {
 		t.Errorf("CreateImageError does not unwrap to its SurfaceError")
+	}
+}
+
+func TestParseDxgiFormat(t *testing.T) {
+	seen := map[string]DxgiFormat{}
+	for f, name := range dxgiFormatNames {
+		upper := strings.ToUpper(name)
+		if other, ok := seen[upper]; ok {
+			t.Fatalf("%v and %v have the same case-insensitive name", f, other)
+		}
+		seen[upper] = f
+		if got, ok := ParseDxgiFormat(name); !ok || got != f {
+			t.Errorf("ParseDxgiFormat(%q) = %v, %v", name, got, ok)
+		}
+	}
+	for name, want := range map[string]DxgiFormat{
+		"bc7_unorm_srgb":             DxgiFormatBC7_UNorm_sRGB,
+		"DXGI_FORMAT_BC7_UNORM_SRGB": DxgiFormatBC7_UNorm_sRGB,
+		"DXGI_FORMAT_R8G8B8A8_UNORM": DxgiFormatR8G8B8A8_UNorm,
+	} {
+		if got, ok := ParseDxgiFormat(name); !ok || got != want {
+			t.Errorf("ParseDxgiFormat(%q) = %v, %v; want %v", name, got, ok, want)
+		}
+	}
+	if _, ok := ParseDxgiFormat("BC9"); ok {
+		t.Error("ParseDxgiFormat accepted an unknown name")
 	}
 }

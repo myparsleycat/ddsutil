@@ -6,7 +6,10 @@ package ddsutil
 //
 // ... (see LICENSE for the full text)
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // DxgiFormat is a DXGI pixel format, matching the values of the DXGI_FORMAT
 // enum used by the DX10 DDS header extension.
@@ -264,6 +267,19 @@ func (f DxgiFormat) String() string {
 		return s
 	}
 	return fmt.Sprintf("DxgiFormat(%d)", uint32(f))
+}
+
+// ParseDxgiFormat returns the DxgiFormat with the given name, ignoring case.
+// It accepts the names returned by DxgiFormat.String (e.g. "BC7_UNorm_sRGB")
+// and the DXGI_FORMAT constant names (e.g. "DXGI_FORMAT_BC7_UNORM_SRGB").
+func ParseDxgiFormat(name string) (DxgiFormat, bool) {
+	name = strings.TrimPrefix(strings.ToUpper(name), "DXGI_FORMAT_")
+	for f, n := range dxgiFormatNames {
+		if strings.ToUpper(n) == name {
+			return f, true
+		}
+	}
+	return 0, false
 }
 
 // DxgiFormatFromU32 converts a raw u32 value to a DxgiFormat, returning false

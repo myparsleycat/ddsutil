@@ -78,10 +78,16 @@ and `ddsutil.Read`/`Dds.Write` for stream-based file I/O.
 ## Command-line tools
 
 ```sh
-go run ./cmd/ddsinfo texture.dds        # dump header information
-go run ./cmd/dds2png texture.dds out.png
-go run ./cmd/retag texture.dds BC7_UNorm_sRGB   # re-tag DX10 format, no data conversion
+go run ./cmd/ddsinfo texture.dds...               # dump header information
+go run ./cmd/dds2png texture.dds [out.png]        # decode to PNG
+go run ./cmd/dds2png -layer 2 -mip 1 cube.dds     # pick a layer, mip or -slice
+go run ./cmd/retag texture.dds BC7_UNorm_sRGB     # re-tag the DXGI format, no data conversion
 ```
+
+`retag` accepts any DXGI format name (e.g. `BC7_UNorm_sRGB` or
+`DXGI_FORMAT_BC7_UNORM_SRGB`), adds a DX10 header to legacy files, refuses
+formats with a different data size unless `-force` is given, and writes the
+result atomically (to `-o` or over the input).
 
 ## Known quirks
 

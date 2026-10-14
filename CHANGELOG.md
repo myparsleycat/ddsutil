@@ -45,6 +45,7 @@ The API now follows Go naming conventions. Update callers as follows:
   `GeneralError` so they can be tested with `errors.Is`.
 - `CreateImageError` unwraps to its `SurfaceError`.
 - `Mipmaps` implements `fmt.Stringer`.
+- `ParseDxgiFormat`, which looks up a DXGI format by name.
 - `NRGBAFromDds`, which returns an `image.NRGBA` matching the straight alpha
   stored in DDS files.
 
@@ -63,6 +64,20 @@ The API now follows Go naming conventions. Update callers as follows:
   surface data without copying, as documented.
 - A header declaring 2^32-1 mipmaps made `LayerData` loop for seconds, and
   size computations wrapped around for textures over 4 GiB.
+
+### Command-line tools
+
+- All tools report errors with a message and exit status instead of
+  panicking.
+- `ddsinfo` accepts several files and prints the decodable image format and
+  the expected data size.
+- `dds2png` selects the layer, mip level and depth slice with `-layer`,
+  `-mip` and `-slice`, reads only that mip level, writes straight alpha
+  correctly (it was treated as premultiplied), and names the output after the
+  input by default.
+- `retag` accepts any DXGI format name, converts legacy headers to DX10,
+  rejects formats with a different data size unless `-force` is given, and
+  writes atomically, optionally to `-o`.
 
 ### Performance
 
