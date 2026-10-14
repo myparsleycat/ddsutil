@@ -84,6 +84,7 @@ func retag(input, output, formatName string, force bool) error {
 	} else {
 		dds.Header10.DxgiFormat = format
 	}
+	setPitchOrLinearSize(dds, format)
 
 	if err := writeFileAtomic(output, dds); err != nil {
 		return err
@@ -124,9 +125,36 @@ func addHeader10(dds *ddsutil.Dds, format ddsutil.DxgiFormat) {
 	dds.Header.SPF = ddsutil.PixelFormatFromDXGI(format)
 }
 
+// setPitchOrLinearSize describes the size of the base mip level with format,
+// as the header constructors do, so that readers relying on the header's
+// pitch or linear size see the new format's size (relevant with -force).
+func setPitchOrLinearSize(dds *ddsutil.Dds, format ddsutil.DxgiFormat) {
+	var depth uint32
+	if dds.Depth() > 1 {
+		depth = dds.Depth()
+	}
+	const sizeFlags = ddsutil.HeaderFlagsPITCH | ddsutil.HeaderFlagsLINEARSIZE
+	dds.Header.Flags &^= sizeFlags
+	dds.Header.Pitch, dds.Header.LinearSize = nil, nil
+	fresh, err := ddsutil.NewHeaderDxgi(ddsutil.DxgiParams{
+		Width: dds.Width(), Height: dds.Height(), Depth: depth, Format: format,
+	})
+	if err != nil {
+		// The format has no pitch (or it overflows): leave both unset.
+		return
+	}
+	dds.Header.Flags |= fresh.Flags & sizeFlags
+	dds.Header.Pitch, dds.Header.LinearSize = fresh.Pitch, fresh.LinearSize
+}
+
 // writeFileAtomic writes dds to a temporary file next to path and renames it
-// over path, so a failed write never leaves a truncated file behind.
+// over path, so a failed write never leaves a truncated file behind. If path
+// is a symbolic link, the file it points to is replaced. Permission bits are
+// kept; the owner becomes the user running retag.
 func writeFileAtomic(path string, dds *ddsutil.Dds) error {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err

@@ -68,3 +68,35 @@ func TestRetagRejectsSizeMismatch(t *testing.T) {
 		t.Fatal("unknown format accepted")
 	}
 }
+
+func TestRetagForceUpdatesLinearSize(t *testing.T) {
+	path := copyTestdata(t, "bc1.dds")
+	if err := retag(path, path, "BC7_UNorm", true); err != nil {
+		t.Fatal(err)
+	}
+	dds := readDds(t, path)
+	// 8x8 BC7 is 4 blocks of 16 bytes.
+	if dds.Header.LinearSize == nil || *dds.Header.LinearSize != 64 || dds.Header.Pitch != nil {
+		t.Fatalf("pitch %v, linear size %v; want linear size 64", dds.Header.Pitch, dds.Header.LinearSize)
+	}
+	if !dds.Header.Flags.Contains(ddsutil.HeaderFlagsLINEARSIZE) || dds.Header.Flags.Contains(ddsutil.HeaderFlagsPITCH) {
+		t.Fatalf("flags %v", dds.Header.Flags)
+	}
+}
+
+func TestRetagThroughSymlink(t *testing.T) {
+	target := copyTestdata(t, "bc1.dds")
+	link := filepath.Join(t.TempDir(), "link.dds")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if err := retag(link, link, "BC1_UNorm_sRGB", false); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link was replaced: %v, %v", info, err)
+	}
+	if dds := readDds(t, target); dds.Header10 == nil || dds.Header10.DxgiFormat != ddsutil.DxgiFormatBC1_UNorm_sRGB {
+		t.Fatal("link target was not retagged")
+	}
+}
