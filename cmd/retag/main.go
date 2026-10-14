@@ -137,14 +137,16 @@ func simpleLayout(format ddsutil.DataFormat) bool {
 	return true
 }
 
-// addHeader10 converts a legacy header to one with a DX10 extension header.
+// addHeader10 converts a legacy header to one with a DX10 extension header,
+// keeping the premultiplied alpha that the DXT2 and DXT4 FourCCs imply.
 func addHeader10(dds *ddsutil.Dds, format ddsutil.DxgiFormat) {
+	alphaMode := dds.AlphaMode()
 	isCubemap := dds.Header.Caps2.Contains(ddsutil.Caps2CUBEMAP)
 	dimension := ddsutil.D3D10ResourceDimensionTexture2D
 	if dds.Depth() > 1 {
 		dimension = ddsutil.D3D10ResourceDimensionTexture3D
 	}
-	header10 := ddsutil.NewHeader10(format, isCubemap, dimension, 1, ddsutil.AlphaModeUnknown)
+	header10 := ddsutil.NewHeader10(format, isCubemap, dimension, 1, alphaMode)
 	dds.Header10 = &header10
 	dds.Header.SPF = ddsutil.PixelFormatFromDXGI(format)
 }

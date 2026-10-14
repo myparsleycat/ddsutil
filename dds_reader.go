@@ -95,7 +95,7 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 		Layers:      arrayLayerCount(&dds),
 		Mipmaps:     dds.NumMipmapLevels(),
 		ImageFormat: imageFormat,
-		AlphaMode:   ddsAlphaMode(&dds),
+		AlphaMode:   dds.AlphaMode(),
 	}
 	if metadata.Width == 0 {
 		return nil, InvalidFieldError("width")
@@ -136,17 +136,6 @@ func NewDdsReader(src io.ReaderAt, size int64) (*DdsReader, error) {
 		return nil, err
 	}
 	return r, nil
-}
-
-// ddsAlphaMode returns the alpha mode stored in dds.
-func ddsAlphaMode(dds *Dds) AlphaMode {
-	if dds.Header10 != nil {
-		return dds.Header10.AlphaMode
-	}
-	if fourCC := dds.Header.SPF.FourCC; fourCC != nil && (*fourCC == FourCC(FourCCDXT2) || *fourCC == FourCC(FourCCDXT4)) {
-		return AlphaModePreMultiplied
-	}
-	return AlphaModeUnknown
 }
 
 // Metadata returns a copy of the parsed DDS image metadata.

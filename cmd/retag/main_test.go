@@ -144,3 +144,35 @@ func TestRetagRejectsVideoFormats(t *testing.T) {
 		t.Fatalf("retag with -force: %v", err)
 	}
 }
+
+func TestRetagKeepsLegacyPremultipliedAlpha(t *testing.T) {
+	for _, tc := range []struct {
+		format ddsutil.D3DFormat
+		name   string
+		want   ddsutil.AlphaMode
+	}{
+		{ddsutil.D3DFormatDXT2, "bc2_unorm", ddsutil.AlphaModePreMultiplied},
+		{ddsutil.D3DFormatDXT3, "bc2_unorm", ddsutil.AlphaModeUnknown},
+		{ddsutil.D3DFormatDXT4, "bc3_unorm", ddsutil.AlphaModePreMultiplied},
+	} {
+		dds, err := ddsutil.NewD3D(ddsutil.D3DParams{Width: 4, Height: 4, Format: tc.format})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "in.dds")
+		data, err := dds.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := retag(path, path, tc.name, false); err != nil {
+			t.Fatalf("%v: %v", tc.format, err)
+		}
+		after := readDds(t, path)
+		if after.Header10 == nil || after.Header10.AlphaMode != tc.want {
+			t.Errorf("%v: Header10 = %+v, want alpha mode %v", tc.format, after.Header10, tc.want)
+		}
+	}
+}

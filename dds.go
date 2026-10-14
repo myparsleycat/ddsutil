@@ -202,6 +202,20 @@ func (d *Dds) Write(w io.Writer) error {
 	return mapIO(err)
 }
 
+// AlphaMode returns the alpha mode of the DX10 header, or
+// AlphaModePreMultiplied for the legacy DXT2 and DXT4 FourCCs, whose
+// premultiplied alpha is part of the format. It returns AlphaModeUnknown for
+// other files without a DX10 header.
+func (d *Dds) AlphaMode() AlphaMode {
+	if d.Header10 != nil {
+		return d.Header10.AlphaMode
+	}
+	if fourCC := d.Header.SPF.FourCC; fourCC != nil && (*fourCC == FourCC(FourCCDXT2) || *fourCC == FourCC(FourCCDXT4)) {
+		return AlphaModePreMultiplied
+	}
+	return AlphaModeUnknown
+}
+
 // D3DFormat attempts to get the format of this DDS, presuming it is a
 // D3DFormat.
 func (d *Dds) D3DFormat() (D3DFormat, bool) {
