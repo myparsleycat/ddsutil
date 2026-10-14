@@ -80,8 +80,8 @@ func (s *Surface) DecodeLayersMipmapsRgbaf32(layerStart, layerEnd, mipmapStart, 
 func decodeSurfaceU8(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd uint32) ([]uint8, error) {
 	var combined []uint8
 	for layer := layerStart; layer < layerEnd; layer++ {
-		for level := uint32(0); level < surface.Depth; level++ {
-			for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+		for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+			for level := uint32(0); level < MipDimension(surface.Depth, mipmap); level++ {
 				data := surface.Get(layer, level, mipmap)
 				if data == nil {
 					return nil, &SurfaceError{Kind: SurfaceErrorMipmapDataOutOfBounds, Layer: layer, Mipmap: mipmap}
@@ -107,8 +107,8 @@ func decodeSurfaceU8(surface *Surface, layerStart, layerEnd, mipmapStart, mipmap
 func decodeSurfaceF32(surface *Surface, layerStart, layerEnd, mipmapStart, mipmapEnd uint32) ([]float32, error) {
 	var combined []float32
 	for layer := layerStart; layer < layerEnd; layer++ {
-		for level := uint32(0); level < surface.Depth; level++ {
-			for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+		for mipmap := mipmapStart; mipmap < mipmapEnd; mipmap++ {
+			for level := uint32(0); level < MipDimension(surface.Depth, mipmap); level++ {
 				data := surface.Get(layer, level, mipmap)
 				if data == nil {
 					return nil, &SurfaceError{Kind: SurfaceErrorMipmapDataOutOfBounds, Layer: layer, Mipmap: mipmap}

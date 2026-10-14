@@ -78,11 +78,23 @@ func mulOverflow(a, b int) (int, bool) {
 // calculateOffset returns the byte offset of (layer, depth_level, mipmap)
 // within a tightly packed surface, or ok=false when the request is out of
 // bounds or would overflow.
+//
+// Each layer stores its mipmaps in order and each mipmap stores its depth
+// slices in order, so a mipmap only has MipDimension(depth, mipmap) slices.
 func calculateOffset(layer, depthLevel, mipmap uint32, dimensions [3]uint32, blockDimensions [3]uint32, blockSizeInBytes int, mipmapsPerLayer uint32) (int, bool) {
 	width, height, depth := dimensions[0], dimensions[1], dimensions[2]
 	blockWidth, blockHeight, blockDepth := blockDimensions[0], blockDimensions[1], blockDimensions[2]
 
-	mipSizes := make([]int, 0, mipmapsPerLayer)
+	// A surface always has at least the base mip level.
+	if mipmapsPerLayer < 1 {
+		mipmapsPerLayer = 1
+	}
+	if mipmap >= mipmapsPerLayer || depthLevel >= MipDimension(depth, mipmap) {
+		return 0, false
+	}
+
+	// Assume mipmaps are tightly packed. This is the case for DDS surface data.
+	layerSize, mipOffset := 0, 0
 	for i := uint32(0); i < mipmapsPerLayer; i++ {
 		mipW := MipDimension(width, i)
 		mipH := MipDimension(height, i)
@@ -91,7 +103,12 @@ func calculateOffset(layer, depthLevel, mipmap uint32, dimensions [3]uint32, blo
 		if !ok {
 			return 0, false
 		}
-		mipSizes = append(mipSizes, size)
+		if i == mipmap {
+			mipOffset = layerSize
+		}
+		if layerSize, ok = addOverflow3(layerSize, size, 0); !ok {
+			return 0, false
+		}
 	}
 
 	// Each depth level adds another rounded 2D slice.
@@ -102,23 +119,10 @@ func calculateOffset(layer, depthLevel, mipmap uint32, dimensions [3]uint32, blo
 		return 0, false
 	}
 
-	// Assume mipmaps are tightly packed. This is the case for DDS surface data.
-	layerSize := 0
-	for _, s := range mipSizes {
-		layerSize += s
-	}
-
 	// Each layer should have the same number of mipmaps.
 	layerOffset, ok := mulOverflow(int(layer), layerSize)
 	if !ok {
 		return 0, false
-	}
-	if int(mipmap) > len(mipSizes) {
-		return 0, false
-	}
-	mipOffset := 0
-	for _, s := range mipSizes[:mipmap] {
-		mipOffset += s
 	}
 	depthOffset, ok := mulOverflow(mipSize2d, int(depthLevel))
 	if !ok {

@@ -316,3 +316,80 @@ func TestDecodeEncodeAllFormatsF32(t *testing.T) {
 		}
 	}
 }
+
+// TestEncodeDecode3dMipmapsRoundTrip checks that every depth slice of every
+// mipmap of a 3D surface survives encoding and decoding.
+func TestEncodeDecode3dMipmapsRoundTrip(t *testing.T) {
+	for _, format := range []ImageFormat{Rgba8Unorm, Bgra8Unorm, BC1RgbaUnorm} {
+		format := format
+		t.Run(format.String(), func(t *testing.T) {
+			const w, h, d = 8, 8, 4
+			tolerance := 0
+			data := make([]uint8, w*h*d*4)
+			for i := range data {
+				data[i] = uint8(i * 7)
+			}
+			if format.IsBlockCompressed() {
+				// Use a constant color per slice so block compression
+				// reproduces it closely.
+				tolerance = 8
+				for z := 0; z < d; z++ {
+					for i := 0; i < w*h; i++ {
+						copy(data[(z*w*h+i)*4:], []uint8{uint8(z * 60), 128, 255 - uint8(z*60), 255})
+					}
+				}
+			}
+			surface := &SurfaceRgba8{Width: w, Height: h, Depth: d, Layers: 1, Mipmaps: 1, Data: data}
+			expected, err := surface.Encode(Rgba8Unorm, QualityNormal, MipmapsGeneratedAutomatic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := surface.Encode(format, QualityNormal, MipmapsGeneratedAutomatic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if encoded.Mipmaps != 4 {
+				t.Fatalf("mipmaps = %d, want 4", encoded.Mipmaps)
+			}
+			decoded, err := encoded.DecodeRgba8()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded.Data) != len(expected.Data) {
+				t.Fatalf("decoded %d bytes, want %d", len(decoded.Data), len(expected.Data))
+			}
+			for mipmap := uint32(0); mipmap < 4; mipmap++ {
+				for level := uint32(0); level < MipDimension(d, mipmap); level++ {
+					got := decoded.Get(0, level, mipmap)
+					want := expected.Get(0, level, mipmap)
+					if got == nil || want == nil {
+						t.Fatalf("mip %d level %d: missing data", mipmap, level)
+					}
+					for i := range want {
+						diff := int(got[i]) - int(want[i])
+						if diff < -tolerance || diff > tolerance {
+							t.Fatalf("mip %d level %d byte %d: got %d want %d", mipmap, level, i, got[i], want[i])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCalculateOffsetOutOfBounds(t *testing.T) {
+	dims := [3]uint32{8, 8, 8}
+	blocks := [3]uint32{1, 1, 1}
+	if _, ok := calculateOffset(0, 4, 1, dims, blocks, 4, 4); ok {
+		t.Error("depth level 4 of mipmap 1 (depth 4) should be out of bounds")
+	}
+	if _, ok := calculateOffset(0, 3, 1, dims, blocks, 4, 4); !ok {
+		t.Error("depth level 3 of mipmap 1 (depth 4) should be in bounds")
+	}
+	if _, ok := calculateOffset(0, 0, 4, dims, blocks, 4, 4); ok {
+		t.Error("mipmap 4 of a 4 mipmap surface should be out of bounds")
+	}
+	if _, ok := calculateOffset(0, 0, 0, dims, blocks, 4, 0); !ok {
+		t.Error("a surface with 0 mipmaps still has a base level")
+	}
+}

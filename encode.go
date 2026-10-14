@@ -84,9 +84,11 @@ func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageForm
 	default:
 		if count, ok := mipmaps.GeneratedExactCount(); ok {
 			numMipmaps = count
-		} else {
-			numMipmaps = 1
 		}
+	}
+	// A count of 0 still encodes the base mip level.
+	if numMipmaps < 1 {
+		numMipmaps = 1
 	}
 
 	useSurface := mipmaps == MipmapsFromSurface
@@ -162,8 +164,11 @@ func getMipmapData[S getMipmapSurface[P], P channel](surface S, layer, mipmap ui
 	mipDepth := MipDimension(surface.surfaceDepth(), mipmap)
 
 	var data []P
-	for level := uint32(0); level < surface.surfaceDepth(); level++ {
+	for level := uint32(0); level < mipDepth; level++ {
 		newData := surface.get(layer, level, mipmap)
+		if newData == nil {
+			return nil, &SurfaceError{Kind: SurfaceErrorMipmapDataOutOfBounds, Layer: layer, Mipmap: mipmap}
+		}
 		data = append(data, newData...)
 	}
 
