@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.1 - 2026-11-23
+
+### Fixed
+
+- Fast BC7 encoding checks additional endpoint directions when a pixel has
+  large color error even if the overall block error is below the limit.
+
 ## v0.3.0 - 2026-11-23
 
 ### Breaking changes

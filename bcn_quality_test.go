@@ -296,3 +296,30 @@ func TestEncodeBC7FastPreservesDominantColor(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeBC7FastPreservesIsolatedColor(t *testing.T) {
+	data := make([]byte, 4*4*4)
+	for i := 0; i < 8; i++ {
+		copy(data[i*4:], []byte{72, 144, 72, 255})
+	}
+	for i := 8; i < 14; i++ {
+		copy(data[i*4:], []byte{144, 72, 144, 255})
+	}
+	copy(data[56:], []byte{0, 0, 144, 255, 0, 0, 144, 255})
+
+	source := &SurfaceRgba8{Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 1, Data: data}
+	encoded, err := source.Encode(BC7RgbaUnorm, QualityFast, MipmapsDisabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := encoded.DecodeRgba8()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 14; i < 16; i++ {
+		pixel := decoded.Data[i*4:][:4]
+		if pixel[0] > 1 || pixel[1] > 1 || pixel[2] < 143 || pixel[2] > 145 {
+			t.Errorf("pixel %d: got %v, want RGB within 1 of (0, 0, 144)", i, pixel)
+		}
+	}
+}

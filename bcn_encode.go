@@ -1095,15 +1095,17 @@ var bc7Weight4 = [16]uint32{0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55,
 
 const bc7AlphaCutoff = 128
 
-// Search beyond the principal axis when its RMS error exceeds 32 per RGBA channel.
+// Search beyond the principal axis above 32 RMS per channel for the block or 48 for any pixel.
 const bc7FastErrorLimit = 16 * 4 * 32 * 32
+const bc7FastPixelErrorLimit = 4 * 48 * 48
 
 // bc7Fit is a candidate BC7 mode 6 block and its squared error.
 type bc7Fit struct {
-	e0, e1  [4]uint8
-	p0, p1  uint8
-	indices uint64
-	err     uint64
+	e0, e1      [4]uint8
+	p0, p1      uint8
+	indices     uint64
+	err         uint64
+	maxPixelErr uint64
 }
 
 // consider replaces best with the evaluation of the 7-bit endpoints e0, e1
@@ -1121,7 +1123,7 @@ func (best *bc7Fit) consider(block *[16][4]uint8, e0, e1 [4]uint8, p0, p1 uint8,
 	}
 
 	// Assign 4-bit indices and accumulate the error.
-	var err uint64
+	var err, maxPixelErr uint64
 	var indices uint64
 	for i := 0; i < 16; i++ {
 		bestK := 0
@@ -1143,9 +1145,10 @@ func (best *bc7Fit) consider(block *[16][4]uint8, e0, e1 [4]uint8, p0, p1 uint8,
 		}
 		indices |= uint64(bestK) << uint(i*4)
 		err += bestErr
+		maxPixelErr = max(maxPixelErr, bestErr)
 	}
 	if err < best.err {
-		*best = bc7Fit{e0: e0, e1: e1, p0: p0, p1: p1, indices: indices, err: err}
+		*best = bc7Fit{e0: e0, e1: e1, p0: p0, p1: p1, indices: indices, err: err, maxPixelErr: maxPixelErr}
 	}
 }
 
@@ -1268,7 +1271,7 @@ func compressBc7Block(block [16][4]uint8, quality Quality) [16]byte {
 		}
 	}
 	tryOrientation(&best, orientation)
-	if quality == QualityFast && best.err > bc7FastErrorLimit {
+	if quality == QualityFast && (best.err > bc7FastErrorLimit || best.maxPixelErr > bc7FastPixelErrorLimit) {
 		varying := 0
 		for c := range minV {
 			if minV[c] != maxV[c] {
