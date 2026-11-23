@@ -241,3 +241,58 @@ func TestEncodeBc1QualityMonotonic(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeBC7FastPreservesAlphaCutoff(t *testing.T) {
+	for _, alpha := range [][2]byte{{0, 254}, {127, 128}} {
+		data := make([]byte, 4*4*4)
+		for i := 0; i < 16; i++ {
+			pixel := data[i*4:][:4]
+			switch {
+			case i < 3:
+				copy(pixel, []byte{64, 254, 0, alpha[0]})
+			case i < 14:
+				copy(pixel, []byte{254, 0, 64, alpha[0]})
+			default:
+				copy(pixel, []byte{192, 64, 192, alpha[1]})
+			}
+		}
+		source := &SurfaceRgba8{Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 1, Data: data}
+		encoded, err := source.Encode(BC7RgbaUnorm, QualityFast, MipmapsDisabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := encoded.DecodeRgba8()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 3; i < len(data); i += 4 {
+			if (decoded.Data[i] >= 128) != (data[i] >= 128) {
+				t.Errorf("alpha levels %v, pixel %d: alpha changed from %d to %d across the cutoff",
+					alpha, i/4, data[i], decoded.Data[i])
+			}
+		}
+	}
+}
+
+func TestEncodeBC7FastPreservesDominantColor(t *testing.T) {
+	data := make([]byte, 4*4*4)
+	for i := 0; i < 12; i++ {
+		copy(data[i*4:], []byte{128, 254, 254, 255})
+	}
+	copy(data[48:], []byte{128, 128, 64, 255, 128, 254, 254, 255, 128, 64, 0, 255, 254, 254, 254, 255})
+	source := &SurfaceRgba8{Width: 4, Height: 4, Depth: 1, Layers: 1, Mipmaps: 1, Data: data}
+	encoded, err := source.Encode(BC7RgbaUnorm, QualityFast, MipmapsDisabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := encoded.DecodeRgba8()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		pixel := decoded.Data[i*4:][:4]
+		if pixel[0] < 120 || pixel[0] > 136 || pixel[1] < 246 || pixel[2] < 246 {
+			t.Fatalf("pixel %d: got %v, want RGB within 8 of (128, 254, 254)", i, pixel)
+		}
+	}
+}

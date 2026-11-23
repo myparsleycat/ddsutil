@@ -28,6 +28,10 @@ import "math"
 
 // encodeBcn encodes pixel data to a compressed BCn format.
 func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Quality) ([]byte, error) {
+	return encodeBcnWithBC7Fast(bc, width, height, data, quality, nil)
+}
+
+func encodeBcnWithBC7Fast[T channel](bc bcFormat, width, height uint32, data []T, quality Quality, bc7 BC7FastEncoder) ([]byte, error) {
 	// Surface dimensions are not validated yet and may cause overflow.
 	expectedSize, ok := mipSize(int(width), int(height), 1, blockWidth, blockHeight, 1, elementsPerBlock)
 	if !ok {
@@ -82,6 +86,15 @@ func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Q
 		rgba8, err := channelBytes(data)
 		if err != nil {
 			return nil, err
+		}
+		if bc == bcFmt7 && quality == QualityFast && bc7 != nil {
+			handled, err := bc7(width, height, rgba8[:expectedSize], out)
+			if err != nil {
+				return nil, err
+			}
+			if handled {
+				return out, nil
+			}
 		}
 		parallelFor(blocksY, blocksX, func(by int) {
 			y := uint32(by * blockHeight)
@@ -651,6 +664,9 @@ func fitAlphaEndpoints(targets *[16]int32, lo, hi int32, palette alphaPalette, q
 	// The value range with interpolated levels (a0 > a1), and the range of
 	// the values that are not fixed palette entries (a0 <= a1).
 	best.consider(targets, palette, maxV, minV)
+	if best.err == 0 {
+		return best
+	}
 	innerMin, innerMax := hi, lo
 	for _, v := range targets {
 		if v != lo && v != hi {
@@ -661,7 +677,7 @@ func fitAlphaEndpoints(targets *[16]int32, lo, hi int32, palette alphaPalette, q
 	if innerMin <= innerMax {
 		best.consider(targets, palette, innerMin, innerMax)
 	}
-	if quality == QualityFast {
+	if best.err == 0 || quality == QualityFast {
 		return best
 	}
 
@@ -1077,6 +1093,11 @@ func clampU16(v uint16, max uint16) uint16 {
 // bc7Weight4 is the 4-bit index weight table.
 var bc7Weight4 = [16]uint32{0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64}
 
+const bc7AlphaCutoff = 128
+
+// Search beyond the principal axis when its RMS error exceeds 32 per RGBA channel.
+const bc7FastErrorLimit = 16 * 4 * 32 * 32
+
 // bc7Fit is a candidate BC7 mode 6 block and its squared error.
 type bc7Fit struct {
 	e0, e1  [4]uint8
@@ -1087,7 +1108,7 @@ type bc7Fit struct {
 
 // consider replaces best with the evaluation of the 7-bit endpoints e0, e1
 // and p-bits p0, p1 if it is better.
-func (best *bc7Fit) consider(block *[16][4]uint8, e0, e1 [4]uint8, p0, p1 uint8) {
+func (best *bc7Fit) consider(block *[16][4]uint8, e0, e1 [4]uint8, p0, p1 uint8, matchAlpha bool) {
 	// Decoded endpoint values (8-bit) and the interpolated palette.
 	var palette [16][4]uint32
 	for c := 0; c < 4; c++ {
@@ -1105,7 +1126,11 @@ func (best *bc7Fit) consider(block *[16][4]uint8, e0, e1 [4]uint8, p0, p1 uint8)
 	for i := 0; i < 16; i++ {
 		bestK := 0
 		bestErr := uint64(0xFFFFFFFFFFFFFFFF)
+		visible := block[i][3] >= bc7AlphaCutoff
 		for k := 0; k < 16; k++ {
+			if matchAlpha && (palette[k][3] >= bc7AlphaCutoff) != visible {
+				continue
+			}
 			var e uint64
 			for c := 0; c < 4; c++ {
 				d := uint64(absDiffU32(palette[k][c], uint32(block[i][c])))
@@ -1145,7 +1170,7 @@ func (best *bc7Fit) considerDecoded(block *[16][4]uint8, d0, d1 [4]float32, allP
 			for p1 := uint8(0); p1 < 2; p1++ {
 				e0, _ := quantizeBc7Endpoint(d0, p0)
 				e1, _ := quantizeBc7Endpoint(d1, p1)
-				best.consider(block, e0, e1, p0, p1)
+				best.consider(block, e0, e1, p0, p1, false)
 			}
 		}
 		return
@@ -1160,7 +1185,7 @@ func (best *bc7Fit) considerDecoded(block *[16][4]uint8, d0, d1 [4]float32, allP
 	}
 	e0, p0 := pick(d0)
 	e1, p1 := pick(d1)
-	best.consider(block, e0, e1, p0, p1)
+	best.consider(block, e0, e1, p0, p1, false)
 }
 
 // refine solves for the endpoints that best fit the current indices and
@@ -1208,6 +1233,9 @@ func compressBc7Block(block [16][4]uint8, quality Quality) [16]byte {
 	// Endpoints are per-channel independent, so each channel can map its
 	// min to either endpoint. The orientation selects which.
 	best := bc7Fit{err: ^uint64(0)}
+	// The quantized alpha extrema stay on their respective sides of 0.5.
+	// Match the source side when assigning indices in mixed-coverage fast blocks.
+	matchAlpha := quality == QualityFast && minV[3] < bc7AlphaCutoff && maxV[3] >= bc7AlphaCutoff
 	tryOrientation := func(fit *bc7Fit, orientation int) {
 		var e0, e1 [4]uint8
 		var t0, t1 [4]uint8
@@ -1228,7 +1256,7 @@ func compressBc7Block(block [16][4]uint8, quality Quality) [16]byte {
 		// Endpoint components are 7 bits + 1 shared p-bit per endpoint,
 		// decoded as (e7<<1)|p. Choose the p-bit that best fits the channel
 		// values the endpoint was derived from.
-		fit.consider(&block, e0, e1, bestPBit(e0, t0), bestPBit(e1, t1))
+		fit.consider(&block, e0, e1, bestPBit(e0, t0), bestPBit(e1, t1), matchAlpha)
 	}
 
 	// Flip the channels that decrease along the principal axis.
@@ -1240,6 +1268,22 @@ func compressBc7Block(block [16][4]uint8, quality Quality) [16]byte {
 		}
 	}
 	tryOrientation(&best, orientation)
+	if quality == QualityFast && best.err > bc7FastErrorLimit {
+		varying := 0
+		for c := range minV {
+			if minV[c] != maxV[c] {
+				varying |= 1 << c
+			}
+		}
+		// Constant channels have no direction. Complementary directions share a palette in reverse order.
+		initial := orientation & varying
+		initial = min(initial, initial^varying)
+		for candidate := 0; candidate < 16; candidate++ {
+			if candidate&^varying == 0 && candidate < candidate^varying && candidate != initial {
+				tryOrientation(&best, candidate)
+			}
+		}
+	}
 	if quality != QualityFast {
 		best.refine(&block, points, false)
 	}

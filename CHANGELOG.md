@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 - 2026-11-23
 
 ### Breaking changes
 
@@ -43,6 +43,9 @@ The API now follows Go naming conventions. Update callers as follows:
 
 ### Added
 
+- `EncodeWithBC7Fast` on RGBA8 and RGBA32F surfaces accepts an optional
+  BC7 encoder for each prepared mip level. The Go encoder handles levels
+  the callback declines.
 - `ErrTooLarge`, returned when a size computation would overflow.
 - `ErrInvalidField` and `ErrGeneral`, wrapped by `InvalidFieldError` and
   `GeneralError` so they can be tested with `errors.Is`.
@@ -58,6 +61,8 @@ The API now follows Go naming conventions. Update callers as follows:
 
 ### Fixed
 
+- Fast BC7 encoding preserves which prepared pixels meet the 0.5 alpha
+  cutoff and checks other endpoint directions for blocks with high error.
 - BC4/BC5 snorm encoding produced unsigned blocks, so decoded values were off
   by about 128.
 - 3D textures with mipmaps failed to decode (`MipmapDataOutOfBounds`) and
