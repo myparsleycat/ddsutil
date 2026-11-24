@@ -26,12 +26,9 @@ package ddsutil
 
 import "math"
 
-// encodeBcn encodes pixel data to a compressed BCn format.
-func encodeBcn[T channel](bc bcFormat, width, height uint32, data []T, quality Quality) ([]byte, error) {
-	return encodeBcnWithBC7Fast(bc, width, height, data, quality, nil)
-}
-
-func encodeBcnWithBC7Fast[T channel](bc bcFormat, width, height uint32, data []T, quality Quality, bc7 BC7FastEncoder) ([]byte, error) {
+// encodeBcn encodes pixel data to a compressed BCn format. The encoder, if
+// not nil, is offered the 8-bit formats first.
+func encodeBcn[T channel](bc bcFormat, format ImageFormat, width, height uint32, data []T, quality Quality, encoder BlockEncoder) ([]byte, error) {
 	// Surface dimensions are not validated yet and may cause overflow.
 	expectedSize, ok := mipSize(int(width), int(height), 1, blockWidth, blockHeight, 1, elementsPerBlock)
 	if !ok {
@@ -87,8 +84,8 @@ func encodeBcnWithBC7Fast[T channel](bc bcFormat, width, height uint32, data []T
 		if err != nil {
 			return nil, err
 		}
-		if bc == bcFmt7 && quality == QualityFast && bc7 != nil {
-			handled, err := bc7(width, height, rgba8[:expectedSize], out)
+		if encoder != nil {
+			handled, err := encoder(format, quality, width, height, rgba8[:expectedSize], out)
 			if err != nil {
 				return nil, err
 			}

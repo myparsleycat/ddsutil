@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.0 - 2026-11-25
+
+### Added
+
+- `EncodeWithBlockEncoder` on RGBA8 and RGBA32F surfaces accepts an optional
+  encoder for each prepared mip level of the BC1 to BC5 and BC7 formats, with
+  the requested quality. Signed BC4 and BC5 data is passed as snorm8 bit
+  patterns. The Go encoder handles levels the callback declines.
+
 ## v0.3.1 - 2026-11-23
 
 ### Fixed

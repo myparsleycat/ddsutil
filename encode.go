@@ -5,6 +5,25 @@ package ddsutil
 // neither buffer may be retained after the call. Height may include depth slices.
 type BC7FastEncoder = func(width, height uint32, rgba, dst []byte) (handled bool, err error)
 
+// BlockEncoder encodes one padded 8-bit surface slice of a BC1 to BC5 or BC7
+// format at the given quality into dst. For BC4RSnorm and BC5RgSnorm the
+// channels hold snorm8 bit patterns. Returning false with no error selects the
+// built-in encoder. Input is read-only, and neither buffer may be retained
+// after the call. Height may include depth slices.
+type BlockEncoder = func(format ImageFormat, quality Quality, width, height uint32, data, dst []byte) (handled bool, err error)
+
+func bc7FastBlockEncoder(bc7 BC7FastEncoder) BlockEncoder {
+	if bc7 == nil {
+		return nil
+	}
+	return func(format ImageFormat, quality Quality, width, height uint32, data, dst []byte) (bool, error) {
+		if quality != QualityFast || (format != BC7RgbaUnorm && format != BC7RgbaUnormSrgb) {
+			return false, nil
+		}
+		return bc7(width, height, data, dst)
+	}
+}
+
 // encodeMipmapsOptions describes the per-layer encode loop state.
 type mipData[T channel] struct {
 	width  int
@@ -31,36 +50,48 @@ func (m *mipData[T]) downsample(baseWidth, baseHeight, baseDepth uint32, blockDi
 }
 
 // encode encodes the mip data to the target format.
-func (m *mipData[T]) encode(format ImageFormat, quality Quality, bc7 BC7FastEncoder) ([]byte, error) {
-	return encodePixels[T](uint32(m.width), uint32(m.height)*uint32(m.depth), m.data, format, quality, bc7)
+func (m *mipData[T]) encode(format ImageFormat, quality Quality, encoder BlockEncoder) ([]byte, error) {
+	return encodePixels[T](uint32(m.width), uint32(m.height)*uint32(m.depth), m.data, format, quality, encoder)
 }
 
 // Encode encodes an RGBA8 surface to the given format.
 // The number of mipmaps generated depends on the mipmaps parameter.
 func (s *SurfaceRgba8) Encode(format ImageFormat, quality Quality, mipmaps Mipmaps) (*Surface, error) {
-	return s.EncodeWithBC7Fast(format, quality, mipmaps, nil)
+	return s.EncodeWithBlockEncoder(format, quality, mipmaps, nil)
 }
 
 // EncodeWithBC7Fast is Encode with an optional per-mip accelerator for QualityFast BC7.
 func (s *SurfaceRgba8) EncodeWithBC7Fast(format ImageFormat, quality Quality, mipmaps Mipmaps, bc7 BC7FastEncoder) (*Surface, error) {
+	return s.EncodeWithBlockEncoder(format, quality, mipmaps, bc7FastBlockEncoder(bc7))
+}
+
+// EncodeWithBlockEncoder is Encode with an optional per-mip encoder for the
+// BC1 to BC5 and BC7 formats.
+func (s *SurfaceRgba8) EncodeWithBlockEncoder(format ImageFormat, quality Quality, mipmaps Mipmaps, encoder BlockEncoder) (*Surface, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	return encodeSurface(s, format, quality, mipmaps, bc7)
+	return encodeSurface(s, format, quality, mipmaps, encoder)
 }
 
 // Encode encodes an RGBAF32 surface to the given format.
 // The number of mipmaps generated depends on the mipmaps parameter.
 func (s *SurfaceRgba32Float) Encode(format ImageFormat, quality Quality, mipmaps Mipmaps) (*Surface, error) {
-	return s.EncodeWithBC7Fast(format, quality, mipmaps, nil)
+	return s.EncodeWithBlockEncoder(format, quality, mipmaps, nil)
 }
 
 // EncodeWithBC7Fast is Encode with an optional per-mip accelerator for QualityFast BC7.
 func (s *SurfaceRgba32Float) EncodeWithBC7Fast(format ImageFormat, quality Quality, mipmaps Mipmaps, bc7 BC7FastEncoder) (*Surface, error) {
+	return s.EncodeWithBlockEncoder(format, quality, mipmaps, bc7FastBlockEncoder(bc7))
+}
+
+// EncodeWithBlockEncoder is Encode with an optional per-mip encoder for the
+// BC1 to BC5 and BC7 formats.
+func (s *SurfaceRgba32Float) EncodeWithBlockEncoder(format ImageFormat, quality Quality, mipmaps Mipmaps, encoder BlockEncoder) (*Surface, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	return encodeSurface(s, format, quality, mipmaps, bc7)
+	return encodeSurface(s, format, quality, mipmaps, encoder)
 }
 
 // getMipmapSurface is the interface used by encodeSurface.
@@ -87,7 +118,7 @@ func (s *SurfaceRgba32Float) surfaceLayers() uint32        { return s.Layers }
 func (s *SurfaceRgba32Float) surfaceMipmaps() uint32       { return s.Mipmaps }
 func (s *SurfaceRgba32Float) get(l, d, m uint32) []float32 { return s.Get(l, d, m) }
 
-func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageFormat, quality Quality, mipmaps Mipmaps, bc7 BC7FastEncoder) (*Surface, error) {
+func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageFormat, quality Quality, mipmaps Mipmaps, encoder BlockEncoder) (*Surface, error) {
 	maxMipmaps := maxMipmapCount(max3(surface.surfaceWidth(), surface.surfaceHeight(), surface.surfaceDepth()))
 	var numMipmaps uint32
 	switch mipmaps.mode {
@@ -113,7 +144,7 @@ func encodeSurface[S getMipmapSurface[P], P channel](surface S, format ImageForm
 
 	for layer := uint32(0); layer < surface.surfaceLayers(); layer++ {
 		// Encode 2D or 3D data for this layer.
-		if err := encodeMipmapsRgba(&surfaceData, surface, format, quality, numMipmaps, useSurface, layer, bc7); err != nil {
+		if err := encodeMipmapsRgba(&surfaceData, surface, format, quality, numMipmaps, useSurface, layer, encoder); err != nil {
 			return nil, err
 		}
 	}
@@ -137,7 +168,7 @@ func encodeMipmapsRgba[S getMipmapSurface[P], P channel](
 	numMipmaps uint32,
 	useSurface bool,
 	layer uint32,
-	bc7 BC7FastEncoder,
+	encoder BlockEncoder,
 ) error {
 	bw, bh, bd := format.blockDimensions()
 	blockDimensions := [3]uint32{bw, bh, bd}
@@ -149,7 +180,7 @@ func encodeMipmapsRgba[S getMipmapSurface[P], P channel](
 		return err
 	}
 
-	encoded, err := mipData.encode(format, quality, bc7)
+	encoded, err := mipData.encode(format, quality, encoder)
 	if err != nil {
 		return err
 	}
@@ -165,7 +196,7 @@ func encodeMipmapsRgba[S getMipmapSurface[P], P channel](
 			mipData = mipData.downsample(surface.surfaceWidth(), surface.surfaceHeight(), surface.surfaceDepth(), blockDimensions, mipmap)
 		}
 
-		encoded, err = mipData.encode(format, quality, bc7)
+		encoded, err = mipData.encode(format, quality, encoder)
 		if err != nil {
 			return err
 		}
@@ -242,39 +273,39 @@ func padMipmapRgba[T channel](width, height, depth, newWidth, newHeight, newDept
 
 // encodePixels encodes 2D pixel data to the given format, for u8 and f32
 // channel types.
-func encodePixels[T channel](width, height uint32, data []T, format ImageFormat, quality Quality, bc7 BC7FastEncoder) ([]byte, error) {
+func encodePixels[T channel](width, height uint32, data []T, format ImageFormat, quality Quality, encoder BlockEncoder) ([]byte, error) {
 	switch any(*new(T)).(type) {
 	case uint8:
-		return encodeU8(width, height, any(data).([]uint8), format, quality, bc7)
+		return encodeU8(width, height, any(data).([]uint8), format, quality, encoder)
 	case float32:
-		return encodeF32(width, height, any(data).([]float32), format, quality, bc7)
+		return encodeF32(width, height, any(data).([]float32), format, quality, encoder)
 	}
 	return nil, &SurfaceError{Kind: SurfaceErrorUnsupportedEncodeFormat, Format: format}
 }
 
 // encodeU8 encodes RGBA8 image data to the given format.
-func encodeU8(width, height uint32, data []uint8, format ImageFormat, quality Quality, bc7 BC7FastEncoder) ([]byte, error) {
+func encodeU8(width, height uint32, data []uint8, format ImageFormat, quality Quality, encoder BlockEncoder) ([]byte, error) {
 	// Unorm and srgb only affect how the data is read.
 	// Use the same conversion code for both.
 	switch format {
 	case BC1RgbaUnorm, BC1RgbaUnormSrgb:
-		return encodeBcn(bcFmt1, width, height, data, quality)
+		return encodeBcn(bcFmt1, format, width, height, data, quality, encoder)
 	case BC2RgbaUnorm, BC2RgbaUnormSrgb:
-		return encodeBcn(bcFmt2, width, height, data, quality)
+		return encodeBcn(bcFmt2, format, width, height, data, quality, encoder)
 	case BC3RgbaUnorm, BC3RgbaUnormSrgb:
-		return encodeBcn(bcFmt3, width, height, data, quality)
+		return encodeBcn(bcFmt3, format, width, height, data, quality, encoder)
 	case BC4RUnorm:
-		return encodeBcn(bcFmt4, width, height, data, quality)
+		return encodeBcn(bcFmt4, format, width, height, data, quality, encoder)
 	case BC4RSnorm:
-		return encodeBcn(bcFmt4S, width, height, unorm8ToSnorm8Slice(data), quality)
+		return encodeBcn(bcFmt4S, format, width, height, unorm8ToSnorm8Slice(data), quality, encoder)
 	case BC5RgUnorm:
-		return encodeBcn(bcFmt5, width, height, data, quality)
+		return encodeBcn(bcFmt5, format, width, height, data, quality, encoder)
 	case BC5RgSnorm:
-		return encodeBcn(bcFmt5S, width, height, unorm8ToSnorm8Slice(data), quality)
+		return encodeBcn(bcFmt5S, format, width, height, unorm8ToSnorm8Slice(data), quality, encoder)
 	case BC6hRgbUfloat, BC6hRgbSfloat:
-		return encodeBcn(bcFmt6, width, height, data, quality)
+		return encodeBcn(bcFmt6, format, width, height, data, quality, encoder)
 	case BC7RgbaUnorm, BC7RgbaUnormSrgb:
-		return encodeBcnWithBC7Fast(bcFmt7, width, height, data, quality, bc7)
+		return encodeBcn(bcFmt7, format, width, height, data, quality, encoder)
 	case R8Unorm:
 		return encodeRgbaU8(formatR8, width, height, data)
 	case R8Snorm:
@@ -327,7 +358,7 @@ func encodeU8(width, height uint32, data []uint8, format ImageFormat, quality Qu
 }
 
 // encodeF32 encodes RGBAF32 image data to the given format.
-func encodeF32(width, height uint32, data []float32, format ImageFormat, quality Quality, bc7 BC7FastEncoder) ([]byte, error) {
+func encodeF32(width, height uint32, data []float32, format ImageFormat, quality Quality, encoder BlockEncoder) ([]byte, error) {
 	// Unorm and srgb only affect how the data is read.
 	// Use the same conversion code for both.
 	switch format {
@@ -347,9 +378,9 @@ func encodeF32(width, height uint32, data []float32, format ImageFormat, quality
 		if format == BC5RgSnorm {
 			bc = bcFmt5S
 		}
-		return encodeBcn(bc, width, height, snorm8, quality)
+		return encodeBcn(bc, format, width, height, snorm8, quality, encoder)
 	case BC6hRgbUfloat, BC6hRgbSfloat:
-		return encodeBcn(bcFmt6, width, height, data, quality)
+		return encodeBcn(bcFmt6, format, width, height, data, quality, encoder)
 	case R16Float:
 		return encodeRgbaF32(formatRf16, width, height, data)
 	case Rg16Float:
@@ -379,7 +410,7 @@ func encodeF32(width, height uint32, data []float32, format ImageFormat, quality
 		for i, f := range data {
 			rgba8[i] = f32ToU8(f * 255.0)
 		}
-		return encodeU8(width, height, rgba8, format, quality, bc7)
+		return encodeU8(width, height, rgba8, format, quality, encoder)
 	}
 }
 
